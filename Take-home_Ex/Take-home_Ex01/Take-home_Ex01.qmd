@@ -1,0 +1,7 @@
+---
+title: "Take-home Exercise 1"
+author: "Lee Peck Khee"
+date: 2 May 2023
+date-modified: last-modified
+edit: visual
+---

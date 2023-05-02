@@ -1,6 +1,9 @@
 ---
-title: "Hands-on_Ex03"
+title: "Hands-on Exercise 3"
 author: "Lee Peck Khee"
+date: 28 April 2023
+date-modified: last-modified
+edit: visual
 ---
 
 ## 3.1 Learning Outcome

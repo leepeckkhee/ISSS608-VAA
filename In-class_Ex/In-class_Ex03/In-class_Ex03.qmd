@@ -1,0 +1,7 @@
+---
+title: "In-class Exercise 3"
+author: "Lee Peck Khee"
+date: 29 April 2023
+date-modified: last-modified
+edit: visual
+---
