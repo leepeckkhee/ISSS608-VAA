@@ -1,0 +1,110 @@
+---
+title: "In-class Exercise 4"
+author: "Lee Peck Khee"
+date: 5 May 2023
+date-modified: last-modified
+edit: visual
+execute: 
+  echo: true
+  eval: true
+  warning: false
+---
+
+```{r}
+pacman:: p_load(rstatix, gt, patchwork, tidyverse)
+```
+
+```{r}
+exam_data <- read_csv("data/Exam_data.csv")
+```
+
+### Visualizing Normal Distribution
+
+-   A Q-Q plot, short for "quantile-quantile" plot, is used to assess whether or not a set of data potentially came from some theoretical distribution. In most cases, this type of plot is used to determine whether or not a data set follows a normal distribution.
+
+-   If the data is normally distributied, the points in a Q-Q plot will lie on a straight diagonal line. Conversely, if the points deviate significantly from the straight diagonal line, then it's less likely that the data is normally distributed.
+
+```{r}
+ggplot(exam_data,
+       aes(sample=ENGLISH)) +
+  stat_qq() +
+  stat_qq_line()
+```
+
+In the section below, we present the information in via panel tabset to show two main tabs: "The plot" and "The code chunk".
+
+::: panel-tabset
+## The plot
+
+```{r}
+#| echo: false
+#| fig-width: 4
+#| fig-height: 4
+ggplot(exam_data, 
+       aes(sample=ENGLISH)) +
+  stat_qq() +
+  stat_qq_line()
+```
+
+## The code chunk
+
+```{r}
+#| eval: false
+#| fig-width: 4
+#| fig-height: 4
+ggplot(exam_data, 
+       aes(sample=ENGLISH)) +
+  stat_qq() +
+  stat_qq_line()
+```
+:::
+
+::: callout-note
+We can see that the points deviate significantly from the straight diagonal line. This is a clear indication that the set of data is not normally distributed.
+:::
+
+### Combining statistical graph and analysis table
+
+In the section below, we combine the statistical graph and analysis table into a single view for easy visualization.
+
+::: panel-tabset
+## The plot
+
+```{r}
+#| echo: false
+qq <- ggplot(exam_data,
+             aes(sample=ENGLISH)) +
+  stat_qq() +
+  stat_qq_line()
+
+sw_t <- exam_data %>%
+  shapiro_test(ENGLISH) %>%
+  gt()
+
+tmp <- tempfile(fileext = '.png')
+gtsave(sw_t,tmp)
+table_png <- png::readPNG(tmp, native = TRUE)
+
+qq + table_png
+```
+
+## The code chunk
+
+```{r}
+#| eval: false
+qq <- ggplot(exam_data,
+             aes(sample=ENGLISH)) +
+  stat_qq() +
+  stat_qq_line()
+
+sw_t <- exam_data %>%
+  shapiro_test(ENGLISH) %>%
+  gt()
+
+tmp <- tempfile(fileext = '.png')
+gtsave(sw_t,tmp)
+table_png <- png::readPNG(tmp, native = TRUE)
+
+qq + table_png
+```
+:::
