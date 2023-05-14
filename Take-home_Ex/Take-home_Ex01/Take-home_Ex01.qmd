@@ -12,7 +12,7 @@ execute:
 
 ## 1. The Task
 
-The task is to apply the concepts and methods you had learned in Lesson 1-4 to reveal the demographic and financial characteristics of the city of Engagement by using appropriate static and interactive statistical graphics methods. This exercise requires a user-friendly and interactive solution that helps city managers and planners to explore the complex data in an engaging way and reveal hidden patterns.
+The task is to apply the concepts and methods learned in Lesson 1-4 to reveal the demographic and financial characteristics of the city of Engagement by using appropriate static and interactive statistical graphics methods. This exercise requires a user-friendly and interactive solution that helps city managers and planners to explore the complex data in an engaging way and reveal hidden patterns.
 
 ## 2. Description of Dataset
 
@@ -21,27 +21,18 @@ For the purpose of this study, two data sets are provided. They are:
 Participants.csv: Contains information about the residents of City of Engagement that have agreed to participate in this study.
 
 -   participantId (integer): unique ID assigned to each participant.
-
 -   householdSize (integer): the number of people in the participant's household
-
 -   haveKids (boolean): whether there are children living in the participant's household.
-
 -   age (integer): participant's age in years at the start of the study.
-
 -   educationLevel (string factor): the participant's education level, one of: {"Low", "HighSchoolOrCollege", "Bachelors", "Graduate"}
-
 -   interestGroup (char): a char representing the participant's stated primary interest group, one of {"A", "B", "C", "D", "E", "F", "G", "H", "I", "J"}. Note: specific topics of interest have been redacted to avoid bias.
-
 -   joviality (float): a value ranging from \[0,1\] indicating the participant's overall happiness level at the start of the study.
 
 FinancialJournal.csv: Contains information about financial transactions.
 
 -   participantId (integer): unique ID corresponding to the participant affected
-
 -   timestamp (datetime): the time when the check-in was logged
-
 -   category (string factor): a string describing the expense category, one of {"Education", "Food", "Recreation", "RentAdjustment", "Shelter", "Wage"}
-
 -   amount (double): the amount of the transaction
 
 ## 3. Data Wrangling and Preparation
@@ -49,7 +40,7 @@ FinancialJournal.csv: Contains information about financial transactions.
 ### 3.1 Installing Requisite R packages
 
 ```{r}
-pacman::p_load(plotly, lubridate, tidyverse, psych, ggridges, gganimate, ggrepel, tidyr)
+pacman::p_load(plotly, lubridate, tidyverse, psych, ggridges, gganimate, ggrepel, tidyr, ggstatsplot, ggside)
 ```
 
 ### 3.2 Loading the Dataset
@@ -70,10 +61,14 @@ participants <- read_csv("data/participants.csv")
 +----------------------------------------------------------------------------------------------------------------------------------------------------------------+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
 | Inaccuracies within the **`Shelter`** recorded amount                                                                                                          | There is a column called **`RentAdjustment`** in the original dataset which if we do not net off with the **`Shelter`** recorded amount, it will artificially inflate the individual's spending amount                                                                                                                                                  | The updated **`Shelter`** values was calculated to incorporate **`RentAdjustment`** where applicable.                                                                                |
 +----------------------------------------------------------------------------------------------------------------------------------------------------------------+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| Missing monthly values for 10 participants                                                                                                                     | Participant IDs: 44, 127, 142, 154, 161, 256, 262, 267, 279, 285, only have one month of data in March 2022. Hence, we need to be cautious when using their data in section 4.1 and 4.2                                                                                                                                                                 | These Participant IDs were excluded from the analysis in section 4.1 and 4.2                                                                                                         |
++----------------------------------------------------------------------------------------------------------------------------------------------------------------+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
 | Lack of an average metric in relation to **`Wage`**, **`Savings`**, **`Spending`** and its associated sub-categories (such as Education, Food, Recreation etc) | Given that there are two dataset, **`participants`** and **`financialjournal`** for further analysis, it is useful to merge both dataset together for further analysis. However, **`financialjournal`** dataset presents the spending habits of individual at too granular a level for it to be effectively merged with the **`participants`** dataset. | An average metric was computed for **`Wage`**, **`Savings`**, **`Spending`** and its associated sub categories (such as Education, Food, Recreation etc).                            |
 |                                                                                                                                                                |                                                                                                                                                                                                                                                                                                                                                         |                                                                                                                                                                                      |
 |                                                                                                                                                                | It is also noted that the data spans across twelve months and hence an average metric is suitable as it implies the average yearly financial habits of individuals.                                                                                                                                                                                     |                                                                                                                                                                                      |
 +----------------------------------------------------------------------------------------------------------------------------------------------------------------+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+
+
 
 #### 3.3.1 Check for missing and duplicate records
 
@@ -113,7 +108,7 @@ Thereafter, we performed the below steps via the code below:
 
 2.  Data is then grouped by **`participantId`**, **`timestamp`**, and **`category`** using **`group_by()`** before using the **`summarize()`** function to calculate the sum of **`amount`** for each group.
 
-3.  The **`pivot_wider()`** function is used to pivot the data into one column for each category and the corresponding **`amount`** values in each cell. values_fill is set as 0 to cater for scenario where categories may have a missing value.
+3.  The **`pivot_wider()`** function is used to pivot the data into one column for each category and its corresponding **`amount`** values. values_fill is set as 0 to cater for scenario where categories may have a missing value.
 
 4.  The **`Shelter`** column is adjusted by adding **`RentAdjustment`** to it.
 
@@ -155,7 +150,7 @@ psych::describe(financialjournal_new)
 
 #### 3.3.3 Check on Participants' record to ensure they all have 12 months of data
 
-Thereafter, we group the data by the **`YearMonth`** variable to calculate the total amount on each segment (e.g. **`Education`**, **`Food`**, **`Recreation`**, **`Shelter`** and **`Wage`**. It appears that in the month of Mar 2022, there is a huge spike in the total **`Wage`** amount. This can potentially be a case of bonus payout period. However, we will take a closer look in the subsequent section.
+Thereafter, we group the data by the **`YearMonth`** variable to calculate the total amount on each segment (e.g. **`Education`**, **`Food`**, **`Recreation`**, **`Shelter`** and **`Wage`**). It appears that in the month of Mar 2022, there is a huge spike in the total **`Wage`** amount. This can potentially be a case of bonus payout period. However, we will take a closer look in the subsequent section.
 
 ```{r}
 #| code-fold: true
@@ -194,6 +189,12 @@ financialjournal_new %>%
 ### 4.1 Expenditure of Participants over time period of March 2022 to March 2023
 
 Given the above findings, we will proceed to exclude the ten Participant IDs from our ridgeplot analysis. Ridgeline plot consists of a set of overlapped density plots to help with comparing of multiple distributions in the dataset, and is especially useful to visualise the changes in our key parameters in distribution over time (12 month span).
+
+-   **`Education`**, **`Food`**, **`Recreation`** and **`Shelter`** amounts are extracted and arranged in a long format using pivot_longer()
+-   **`ggplot()`** function is used to create a plot with the amount on the x-axis, category on the y-axis
+-   **`stat_density_ridges()`** function adds density ridges to the plot to show the distribution of spending amounts
+-   **`transition_time()`** function is used to animate the plot from March 2022 to March 2023
+-   **`scale_x_continuous()`** was utilised to set the x-axis limits to be in line with the range of spending amounts within the dataset
 
 From the first Ridgeline graph, we can observe that **`Recreation`** and **`Food`** expenses tend to have a larger fluctuation across a twelve month period from March 2022 to March 2023 as compared to other spend categories.
 
@@ -255,7 +256,7 @@ financialjournal_expendituredetails %>%
 
 ### 4.2 Wage, Overall Spending and Savings of Participants over time period of March 2022 to March 2023
 
-From the second Ridgeline graph, we want to gain a closer insight into an individuals' **`Spending`**, **`Savings`** and **`Wage`**.We can observe that an individuals' **`Spending`** is largely center around a common range despite the huge variation in **`Wage`**. **`Savings`** and **`Wage`** tend to have a wider spread as compared to **`Spending`**.
+For the second Ridgeline graph below, the approach is very similar with that outlined in section 4.1. Specifically, here we want to gain a closer insight into an individuals' **`Spending`**, **`Savings`** and **`Wage`**. We can observe that an individuals' **`Spending`** is largely center around a common range despite the huge variation in **`Wage`**. **`Savings`** and **`Wage`** tend to have a wider spread as compared to **`Spending`**.
 
 ::: panel-tabset
 ## The Plot
@@ -315,7 +316,7 @@ financialjournal_wagesavings %>%
 ```
 :::
 
-Next, we carve out a dataframe called **`financialjournal_avg`** which contains the average values for **`Education`**, **`Food`**, **`Recreation`**, **`Shelter`**, **`Wage`**, **`Savings`**, **`Spending`**.
+Next, we carve out a dataframe called **`financialjournal_avg`** which contains the average values for **`Education`**, **`Food`**, **`Recreation`**, **`Shelter`**, **`Wage`**, **`Savings`**, **`Spending`** for each **`ParticiapntId`**.
 
 ```{r}
 #| code-fold: true
@@ -339,8 +340,6 @@ We then proceed to merge the above dataset with that of **`participants`** datas
 #| code-fold: true
 #| code-summary: "Show code"
 merged_data <- left_join(financialjournal_avg, participants, by = "participantId")
-
-merged_data
 ```
 
 **`isna()`** function was utilised to confirm that there are no missing values post the merge.
@@ -353,17 +352,23 @@ any(is.na(merged_data))
 
 ### 4.3 Age Bucket Amongst Participants
 
-We sliced the age groups into three main buckets, 1) 18 - 30 years old, 2) 31 - 55 years old and 3) \>55 years old.
+We sliced the age groups into three main buckets, 1) 18 - 30 years old, 2) 31 - 55 years old and 3) \>55 years old. This was done to delineate the young adults, middle aged adults, and senior adults.
 
 ```{r}
 #| code-fold: true
 #| code-summary: "Show code"
 merged_data$age_group<- cut(merged_data$age, breaks = c(17, 30, 55, Inf), 
                               labels = c("18-30", "31-55", ">55"))
-merged_data
 ```
 
-We delve deeper into the age group of the participants to better understand the demographics on hand.
+We delve deeper into the age group of the participants to better understand the demographics on hand. We perform the below steps:
+
+-   summarized the data via **`group_by()`** and **`summarize()`** functions to calculate the number of participants in each age bucket before arriving at the percentage values via **`mutate()`** function
+-   used **`geom_col()`** to create a bar chart for each age group
+-   used **`coord_polar()`** to convert the bar chart to a pie chart
+-   used **`geom_label_repel()`** to add percentage labels to each segment of the pie chart
+-   used **`guides()`** to add titles to the legend
+-   used **`labs()`** to add a title to the chart
 
 ::: panel-tabset
 ## The Plot
@@ -425,7 +430,7 @@ ggplot(age_count, aes(x = "", y = age_pct, fill = fct_inorder(age_group))) +
 
 ### 4.4 Education Level Amongst Participants
 
-We delve deeper into the education background level of the participants to better understand the demographics on hand.
+We utilised the same method as outlined in section 4.3 to delve deeper into the education background level of the participants to better understand the demographics on hand.
 
 ::: panel-tabset
 ## The Plot
@@ -492,6 +497,12 @@ ggplot(education_count, aes(x = "" , y = educationlevel_pct, fill = fct_inorder(
 ### 4.5 Violin Plot across Education Level
 
 Next, we leverage on violin plot to take a closer look at how spending (overall and across various sub categories), savings, wage and joviality differs across education level. Violin plots are useful especially when we want to observe the distribution, peaks, valleys and tails of each group's density curve to identify how similar or dissimilar the various groups are.
+
+The plot is created via:
+
+-   **`plot_ly()`** function to create the violin plot. Within the **`plot_ly()`** function, the x-axis of the plot is specified as educationlevel and the y-axis is set to avg_wage initially but will dynamically update thereafter upon the specified selection.
+
+-   **`layout()`** function to define the title of the plot, x-axis labels, y-axis labels, and the dropdown menu via the updatemenus argument.
 
 ::: panel-tabset
 ## The Plot
@@ -903,41 +914,25 @@ plot_ly(data = merged_data,
 
 ### 4.8 Correlation between wage and spending
 
-In this section, we are keen to explore if there is a correlation between wage and spending. Interestingly, there is a weak correlation at 0.14 between wage and spending.
+In this section, we are keen to explore if there is a correlation between wage and spending. We utilised **`ggstatsplot`** and **`ggscatterstats`** function to calculate the correlation and plot a chart. Interestingly, there is a weak positive correlation at 0.14 between wage and spending.
 
 ::: panel-tabset
 ## The Plot
 
 ```{r}
 #| echo: false
-#| fig-width: 6
-#| fig-height: 6
-cor_val_wagespending <- cor(merged_data$avg_wage, merged_data$avg_spending)
-
-ggplot(merged_data, aes(x = avg_wage, y = avg_spending)) +
-  geom_point() +
-  labs(x = "Wage", y = "Spending") +
-  geom_text(x = max(merged_data$avg_wage), y = max(merged_data$avg_spending), 
-            label = paste("Correlation:", round(cor(merged_data$avg_wage, merged_data$avg_spending), 2)),
-            hjust = 1, vjust = 1, size = 4) +
-  theme_classic()
+#| fig-width: 7
+#| fig-height: 7
+ggstatsplot::ggscatterstats(data = merged_data, x = "avg_wage", y = "avg_spending")
 ```
 
 ## The Code Chunk
 
 ```{r}
 #| eval: false
-#| fig-width: 6
-#| fig-height: 6
-cor_val_wagespending <- cor(merged_data$avg_wage, merged_data$avg_spending)
-
-ggplot(merged_data, aes(x = avg_wage, y = avg_spending)) +
-  geom_point() +
-  labs(x = "Wage", y = "Spending") +
-  geom_text(x = max(merged_data$avg_wage), y = max(merged_data$avg_spending), 
-            label = paste("Correlation:", round(cor(merged_data$avg_wage, merged_data$avg_spending), 2)),
-            hjust = 1, vjust = 1, size = 4) +
-  theme_classic()
+#| fig-width: 7
+#| fig-height: 7
+ggstatsplot::ggscatterstats(data = merged_data, x = "avg_wage", y = "avg_spending")
 ```
 :::
 
@@ -950,35 +945,23 @@ We are also keen to explore if there is a correlation between wage and joviality
 
 ```{r}
 #| echo: false
-#| fig-width: 6
-#| fig-height: 6
-merged_data$joviality <- as.numeric(merged_data$joviality)
-cor_val_wagejoviality <- cor(merged_data$avg_wage, merged_data$joviality)
-
-ggplot(merged_data, aes(x = avg_wage, y = joviality)) +
-  geom_point() +
-  labs(x = "Wage", y = "Joviality") +
-  geom_text(x = max(merged_data$avg_wage), y = max(merged_data$joviality), 
-            label = paste("Correlation:", round(cor(merged_data$avg_wage, merged_data$joviality), 2)),
-            hjust = 1, vjust = 1, size = 4) +
-  theme_classic()
+#| fig-width: 7
+#| fig-height: 7
+ggstatsplot::ggscatterstats(data = merged_data, x = "avg_wage", y = "joviality")
 ```
 
 ## The Code Chunk
 
 ```{r}
 #| eval: false
-#| fig-width: 6
-#| fig-height: 6
-merged_data$joviality <- as.numeric(merged_data$joviality)
-cor_val_wagejoviality <- cor(merged_data$avg_wage, merged_data$joviality)
-
-ggplot(merged_data, aes(x = avg_wage, y = joviality)) +
-  geom_point() +
-  labs(x = "Wage", y = "Joviality") +
-  geom_text(x = max(merged_data$avg_wage), y = max(merged_data$joviality), 
-            label = paste("Correlation:", round(cor(merged_data$avg_wage, merged_data$joviality), 2)),
-            hjust = 1, vjust = 1, size = 4) +
-  theme_classic()
+#| fig-width: 7
+#| fig-height: 7
+ggstatsplot::ggscatterstats(data = merged_data, x = "avg_wage", y = "joviality")
 ```
 :::
+
+## 5. Future Work
+
+For future work, we can consider to further enhance on the testing of whether for example avg_education, avg_food, avg_recreation, avg_shelter, avg_wage, avg_savings, avg_spending or joviality are statistically different across the various interest groups, education levels or age groups. This can be done via first checking for normality assumptions before determining which tests (e.g. Anova) to use.
+
+Further analysis such as whether individuals who have kids have a higher joviality can also be investigated and tested accordingly.
