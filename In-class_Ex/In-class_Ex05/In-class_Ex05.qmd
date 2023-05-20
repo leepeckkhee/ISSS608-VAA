@@ -1,0 +1,32 @@
+---
+title: "In-class Exercise 5"
+author: "Lee Peck Khee"
+date: 20 May 2023
+date-modified: last-modified
+edit: visual
+execute: 
+  echo: true
+  eval: true
+  warning: false
+---
+### 5.1 Loading the required packages
+```{r}
+pacman::p_load(jsonlite,igraph, tidygraph, ggraph, 
+               visNetwork,tidyverse)
+```
+
+### 5.2 Loading the dataset
+
+```{r}
+MC1 <- fromJSON("data/MC1.json")
+```
+
+```{r}
+MC1_nodes<- as_tibble(MC1$nodes) %>%
+  select(id,type,country)
+```
+
+```{r}
+MC1_edges<- as_tibble(MC1$links) %>%
+  select(source,target, type, weight,key)
+```
