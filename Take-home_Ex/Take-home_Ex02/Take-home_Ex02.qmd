@@ -1,0 +1,3516 @@
+---
+title: "Take-home Exercise 2"
+author: "Lee Peck Khee"
+date: 20 May 2023
+date-modified: last-modified
+edit: visual
+execute: 
+  echo: true
+  eval: true
+  warning: false
+---
+
+## 1. Task Overview
+
+Seafood is the largest traded food commodity, providing sustenance to more than 3 billion people worldwide. The United Nations Food and Agricultural Organization estimates that 85% of fish stocks are either overfished or fully exploited.
+
+Unfortunately, illegal, unreported, and unregulated fishing is a major contributor to overfishing worldwide. According to a study conducted by the Financial Transparency Coalition, it found that IUU fishing accounts for one-fifth of the global fisheries' catches (equivalent to approximately \$23.5bn) annually. Global losses arising from IUU fishing are also estimated to be approximately \$50bn (Collyns, 2022).
+
+Therefore, as part of Mini-Challenge 2 of VAST Challenge 2023, NGO FishEye International (a nonpartisan organization) is charged with understanding the social, political, and economic forces that drive the illegal fishing trade and I am addressing question 4 of MC Challenge 2. I first begin by outlining the series of steps I took to eventually arrive at my response titled "Mini-Case 2 Challenge Writeup & 4 Images" within Section 7 below.
+
+## 2. Description of Dataset
+
+The dataset utilised for the below analysis consists of a total of 34,552 nodes and 5,464,092 direct edges (shipper to receiver). It is a directed multi-graph, hence multiple edges between the same two nodes are possible. The full details can be found on: https://vast-challenge.github.io/2023/MC2.html
+
+
+## 3. Data Wrangling and Preparation
+
+### 3.1 Installing Requisite R packages
+
+The code chunk below uses p_load() of pacman package to check if the said packages are installed in the computer. If they are, then they will be launched into R.
+
+```{r}
+#| code-fold: true
+#| code-summary: "Show code"
+pacman::p_load(jsonlite, igraph, tidygraph, ggraph, 
+               visNetwork, tidyverse, readxl, ggplot2, plotly, patchwork)
+```
+
+### 3.2 Loading the MC2 Challenge Dataset
+
+We first start off by loading the mc2_challenge_graph.json dataset into "MC2" via the code below:
+
+```{r}
+#| code-fold: true
+#| code-summary: "Show code"
+MC2 <- fromJSON("data/mc2_challenge_graph.json")
+```
+
+### 3.3 Loading the Connect2India Harmonized System Code Dataset
+
+We load an external "Connect2India Harmonized System Code to enable for subsequent understanding of HS Codes within MC2.
+
+```{r}
+#| code-fold: true
+#| code-summary: "Show code"
+hscode_excel_file <- "data/hsn-codes-list.xlsx"
+hscode_map <- read_excel(hscode_excel_file)
+hscode_map <- hscode_map %>%
+  rename_with(~ gsub(" ", "_", .), everything()) %>%
+  mutate(HS_Code = as.character(HS_Code))
+```
+
+Let's take a look at the parent hscode mapping description via the code chunk below
+
+```{r}
+#| code-fold: true
+#| code-summary: "Show code"
+hscode_map_parent <- hscode_map %>%
+  filter(nchar(HS_Code) == 1)
+
+hscode_map_parent
+```
+
+It appears that HS_Code starting with 3 is relevant for our use case.
+
+```{r}
+#| code-fold: true
+#| code-summary: "Show code"
+hscode_map_secondparent <- hscode_map %>%
+  mutate(HS_Code = as.character(HS_Code)) %>%
+  filter(startsWith(HS_Code, "3") & nchar(HS_Code) == 2)
+
+hscode_map_secondparent
+```
+
+More specifically, HS_Code starting with 301, 302, 303, 304, 305, 306, 307 and 308 are applicable for our analysis.
+
+```{r}
+#| code-fold: true
+#| code-summary: "Show code"
+hscode_map_thirdparent <- hscode_map %>%
+  mutate(HS_Code = as.character(HS_Code)) %>%
+  filter(startsWith(HS_Code, "3") & nchar(HS_Code) == 3)
+
+hscode_map_thirdparent
+```
+
+### 3.4 Initialising MC2_nodes and MC2_edges
+
+We begin by initialising the nodes and edges based off the dataset "MC2_challenge_graph" - MC2_nodes consists of id, shpcountry and rcvcountry - MC2_edges consists of source, target, arrivaldate, hscode, valueofgoods_omu, volumeteu, weightkg and valueofgoodsusd.
+
+We utilised the mutate function to derive a new variable called "year" from "arrivaldate". Additionally, we ensured that all MC2_edges records are distinct with no duplicates via the distinct() function.
+
+```{r}
+#| code-fold: true
+#| code-summary: "Show code"
+MC2_nodes<- as_tibble(MC2$nodes) %>%
+  select(id, shpcountry, rcvcountry)
+
+MC2_edges<- as_tibble(MC2$links) %>%
+  mutate(arrivaldate = ymd(arrivaldate)) %>%
+  mutate(year = year(arrivaldate)) %>% 
+  select(source, target, arrivaldate, year, hscode, 
+         valueofgoods_omu, volumeteu, weightkg, valueofgoodsusd) %>%
+  distinct()
+```
+
+### 3.5 Joining of HSCodes to MC2_edges
+
+Thereafter, we weaved in the Description from "Connect2India Harmonized System Code" and populated the Description information within MC2_edges to gain a better understanding of what each hscode means.
+
+From the below, we can see that there are several hscode that are not related to "fishery" products. For example, hscode 630630 refers to sails.
+
+```{r}
+#| code-fold: true
+#| code-summary: "Show code"
+MC2_edges <- left_join(MC2_edges, hscode_map, by = c("hscode" = "HS_Code")) %>%
+  select(source, target, arrivaldate, year, hscode, Description, valueofgoods_omu, volumeteu, weightkg, valueofgoodsusd)
+
+MC2_edges
+```
+
+From the below chart, we can see the top 30 hscode within MC2_edges. Upon further investigation, it seems that HS Codes starting with 1604 and 1605 are relevant for our analysis. 1604 refers to "prepared or preserved fish, fish eggs, caviar", while 1605 refers to Crustaceans, molluscs, etc, prepared or preserved"
+
+```{r}
+#| code-fold: true
+#| code-summary: "Show code"
+top30_hscode <- MC2_edges %>%
+  group_by(hscode) %>%
+  summarize(n = n()) %>%
+  arrange(desc(n)) %>%
+  top_n(30)
+
+top30_hscode <- top30_hscode %>%
+  plot_ly(x = ~reorder(hscode, n), y = ~n, type = "bar") %>%
+  layout(xaxis = list(title = "Parent HSCode"), yaxis = list(title = "Frequency"))
+
+top30_hscode
+```
+
+### 3.6 Refining MC2_edges to fish related HSCodes
+
+To ensure a more effective analysis, we tidied up MC2_edges to only contain hscode that begins with 301 to 308 or 1604 and 1605 to scope MC2_edges towards fish related products. However, as seen from the below output, it seems like there are not sufficient information within the description columns to inform us of the specific product tied to the hscode.
+
+```{r}
+#| code-fold: true
+#| code-summary: "Show code"
+MC2_edges <- MC2_edges %>%
+  filter(str_detect(hscode, "^(301|302|303|304|305|306|307|308|1604|1605)"))
+
+MC2_edges
+```
+
+Therefore, we created a new column to store the hscode_parent where it will contain only the first three digit of the hscode. With this, we then map the description from Connect2India Harmonized System Code to gleam further insights into the worded description.
+
+```{r}
+#| code-fold: true
+#| code-summary: "Show code"
+MC2_edges <- MC2_edges %>%
+  mutate(hscode_parent = substr(hscode, 1, 3))
+
+MC2_edges <- MC2_edges %>%
+  left_join(hscode_map_thirdparent, by = c("hscode_parent" = "HS_Code")) %>%
+  select(-S.No.)%>%
+  rename(hscode_des = Description.x, hscode_parent_des = Description.y)
+
+MC2_edges
+
+```
+
+### 3.7 Cleaning of NA records within MC2_nodes and MC2_edges
+
+Thereafter, we checked MC2_nodes and MC2_edges for NA records via the code chunk below.
+
+```{r}
+#| code-fold: true
+#| code-summary: "Show code"
+any(is.na(MC2_nodes))
+any(is.na(MC2_edges))
+```
+
+As seen from the results above, there are NA records. Therefore, we performed cleaning on the MC2_nodes to remove shpcountry that has na records or rcvcountry that has na records. Additionally, we also removed duplicated IDs within MC2_nodes. The cleaned data is then stored in MC2_nodes_cleaned.
+
+```{r}
+#| code-fold: true
+#| code-summary: "Show code"
+#keeps distinct id and removes NA records within nodes
+MC2_nodes_cleaned <- MC2_nodes %>%
+  distinct(id, .keep_all = TRUE) %>%
+  filter(!is.na(shpcountry) | !is.na(rcvcountry))
+```
+
+Next, we want to determine what are the NA records within MC2_edges, and the extent of missing records within each columns. We can see that valueofgoods_omu has a total of 99.97% missing records, followed by valueofgoodsusd with 3.10% and volumeteu with 0.19%. We also note that hscode_des has 100% missing records as the specific hscodes are not found in Connect2India Harmonized System Code records.
+
+Despite the below results, we will continue to keep the records at this stage, as we are looking to derive a new column called "weight" in the subsequent stage.
+
+```{r}
+#| code-fold: true
+#| code-summary: "Show code"
+na_values <- colMeans(is.na(MC2_edges)) * 100
+
+for (col in names(na_values)) {
+  cat("NA % in", col, ":", na_values[[col]], "%\n")
+}
+```
+
+## 4. Exploratory Data Analysis
+
+### 4.1 Shipping volume (in terms of weight kg) over the years
+
+We begin our overall exploratory data analysis by understanding the volume of fishing shipments in terms of weight (kg) over the years. We utilise ggplot to plot a bar chart over by weight-kg (y-axis) over the years (x-axis). We also utilised scale_y_continuous to format the labels to "billions". Additionally, scale_x_discrete was used to enable the x-axis to be unique values of the year variable from MC2_edges dataframe.
+
+As seen from the plot below, we can see an overall increasing trend in terms of shipment volume. This makes managing IUU fishing even more pressing and urgent.
+
+```{r}
+#| code-fold: true
+#| code-summary: "Show code"
+ggplot(MC2_edges, aes(x = as.factor(year), y = weightkg)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  labs(x = "Year", y = "Weight (kg)", title = "Weight over the Years") +
+  scale_y_continuous(labels = function(x) paste0(x/1e9, "B")) +
+  scale_x_discrete(breaks = unique(MC2_edges$year)) +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+### 4.2 Top 10 HSCodes and Parent HSCodes Frequency
+
+Next, we want to better understand what are the top hscode and parent hscode within MC2_edges. We leveraged on summarize() and arrange() to obtain the top 10 most frequent occurrences of hscode and hscode_parent within MC2_edges dataset.
+
+#### 4.2.1 Top 10 Parent HSCodes
+ Parent HSCodes starting with 304, 160 and 306 are the top three in terms of frequecy counts.
+
+```{r}
+#| code-fold: true
+#| code-summary: "Show code"
+top10_by_hscodeparent <- MC2_edges %>%
+  group_by(hscode_parent) %>%
+  summarize(n = n()) %>%
+  arrange(desc(n)) %>%
+  top_n(10)
+
+top10_by_hscodeparent_plot <- top10_by_hscodeparent %>%
+  plot_ly(x = ~reorder(hscode_parent, n), y = ~n, type = "bar") %>%
+  layout(xaxis = list(title = "Parent HSCode"), yaxis = list(title = "Frequency"))
+
+top10_by_hscodeparent_plot
+```
+
+#### 4.2.2 Top 10 HSCodes
+
+Next, we want to better understand what are the top hscode within MC2_edges. The top three HSCodes are 306170, 304620 and 160414.
+
+```{r}
+#| code-fold: true
+#| code-summary: "Show code"
+top10_by_hscode <- MC2_edges %>%
+  group_by(hscode) %>%
+  summarize(n = n()) %>%
+  arrange(desc(n)) %>%
+  top_n(10)
+
+top10_by_hscode_plot <- top10_by_hscode %>%
+  plot_ly(x = ~reorder(hscode, n), y = ~n, type = "bar") %>%
+  layout(xaxis = list(title = "HSCode"), yaxis = list(title = "Frequency"))
+
+top10_by_hscode_plot
+```
+
+### 4.3 Top 10 HSCodes total valueofgoodsusd and weightkg
+We calculate the top 10 HSCodes for total value of goodsusd and weightkg before combining the separate bar plots for the said two metrics into a single subplot for comparison via subplot(). 
+
+```{r}
+#| code-fold: true
+#| code-summary: "Show code"
+valueofgoodsusd_by_hscode_top10 <- MC2_edges %>%
+  group_by(hscode) %>%
+  summarize(total_valueofgoodsusd = sum(valueofgoodsusd, na.rm = TRUE)) %>%
+  arrange(total_valueofgoodsusd) %>%
+  top_n(10)
+
+valueofgoodsusd_by_hscode_top10_plot <- plot_ly(
+  data = valueofgoodsusd_by_hscode_top10,
+  x = ~hscode,
+  y = ~total_valueofgoodsusd,
+  type = "bar",
+  marker = list(color = "rgba(0, 0, 255, 0.7)"),
+  hovertemplate = "HSCode: %{x}<br>Total Value of Goods USD: %{y}",
+  name = "Value of Goods USD"
+)
+
+weightkg_by_hscode_top10 <- MC2_edges %>%
+  group_by(hscode) %>%
+  summarize(total_weight = sum(weightkg, na.rm = TRUE)) %>%
+  arrange(total_weight) %>%
+  top_n(10)
+
+weightkg_by_hscode_top10_plot <- plot_ly(
+  data = weightkg_by_hscode_top10,
+  x = ~hscode,
+  y = ~total_weight,
+  type = "bar",
+  marker = list(color = "rgba(255, 0, 0, 0.7)"),
+  hovertemplate = "HSCode: %{x}<br>Total Weight: %{y}",
+  name = "Total Weight"
+)
+
+combined_plot_top10_valueofgoodsusd_weightkg <- subplot(
+  valueofgoodsusd_by_hscode_top10_plot,
+  weightkg_by_hscode_top10_plot,
+  nrows = 1,
+  shareX = TRUE,
+  shareY = FALSE
+) %>%
+  layout(
+    title = "Top 10 Value of Goods USD and Total Weight (kg) by HSCode",
+    xaxis = list(title = "HSCode"),
+    yaxis = list(title = "Total Value of Goods USD / Total Weight (kg)"),
+    legend = list(title = "Metrics")
+  )
+
+combined_plot_top10_valueofgoodsusd_weightkg
+
+```
+
+### 4.4 Bottom 10 HSCodes total valueofgoodsusd and weightkg
+We calculate the bottom 10 HSCodes for total value of goodsusd and weightkg before combining the separate bar plots for the said two metrics into a single subplot for comparison via subplot(). 
+
+```{r}
+#| code-fold: true
+#| code-summary: "Show code"
+valueofgoodsusd_by_hscode_bottom10 <- MC2_edges %>%
+  group_by(hscode) %>%
+  summarize(total_valueofgoodsusd = sum(valueofgoodsusd, na.rm = TRUE)) %>%
+  arrange(total_valueofgoodsusd) %>%
+  head(10)
+
+valueofgoodsusd_by_hscode_bottom10_plot <- plot_ly(
+  data = valueofgoodsusd_by_hscode_bottom10,
+  x = ~hscode,
+  y = ~total_valueofgoodsusd,
+  type = "bar",
+  marker = list(color = "rgba(0, 0, 255, 0.7)"),
+  hovertemplate = "HSCode: %{x}<br>Total Value of Goods USD: %{y}",
+  name = "Value of Goods USD"
+)
+
+weightkg_by_hscode_bottom10 <- MC2_edges %>%
+  group_by(hscode) %>%
+  summarize(total_weight = sum(weightkg, na.rm = TRUE)) %>%
+  arrange(total_weight) %>%
+  head(10)
+
+weightkg_by_hscode_bottom10_plot <- plot_ly(
+  data = weightkg_by_hscode_bottom10,
+  x = ~hscode,
+  y = ~total_weight,
+  type = "bar",
+  marker = list(color = "rgba(255, 0, 0, 0.7)"),
+  hovertemplate = "HSCode: %{x}<br>Total Weight: %{y}",
+  name = "Total Weight"
+)
+
+combined_plot_bottom10_valueofgoodsusd_weightkg <- subplot(
+  valueofgoodsusd_by_hscode_bottom10_plot,
+  weightkg_by_hscode_bottom10_plot,
+  nrows = 1,
+  shareX = TRUE,
+  shareY = FALSE
+) %>%
+  layout(
+    title = "Bottom 10 Value of Goods USD and Total Weight (kg) by HSCode",
+    xaxis = list(title = "HSCode"),
+    yaxis = list(title = "Total Value of Goods USD / Total Weight (kg)"),
+    legend = list(title = "Metrics")
+  )
+
+combined_plot_bottom10_valueofgoodsusd_weightkg
+
+```
+
+
+### 4.5 Top 8 Sources across the Years by varying metrics
+Within this section, we take a look a the top 8 sources across the years by weightkg and value of goods usd. We looped over the years to calculate the top 8 sources by the relevant metrics for each year, before leveraging on plot_ly() to create a line chart to visualise the trends over the years.
+
+#### 4.5.1 Weightkg
+
+```{r}
+#| code-fold: true
+#| code-summary: "Show code"
+#Define years
+start_year <- 2028
+end_year <- 2034
+
+#Create empty data frame to store the data for each year
+df_weightkg_sources <- data.frame(year = numeric(),
+                   source = character(),
+                   weightkg = numeric(),
+                   stringsAsFactors = FALSE)
+
+#Loop over the years
+for (year_filter in start_year:end_year) {
+  # Filter the data for the current year
+  MC2_edges_filtered <- filter(MC2_edges, year == year_filter)
+  
+  #Group the filtered data by source and calculate the total weight
+  top8_by_source <- MC2_edges_filtered %>%
+    group_by(source) %>%
+    summarize(weightkg = sum(weightkg)) %>%
+    arrange(desc(weightkg)) %>%
+    top_n(8)
+  
+  #Add the year to the data frame
+  top8_by_source$year <- year_filter
+  
+  #Append the data for the current year to the overall data frame
+  df_weightkg_sources <- bind_rows(df_weightkg_sources, top8_by_source)
+}
+
+line_chart <- df_weightkg_sources %>%
+  plot_ly(x = ~year, y = ~weightkg, color = ~source, type = "scatter", mode = "lines+markers",
+          colors = c("#1B9E77", "#D95F02", "#7570B3", "#E7298A", "#66A61E", "#E6AB02", "#A6761D", "#666666"),
+          text = ~paste("Source: ", source, "<br>Weight: ", weightkg, " kg")) %>%
+  layout(xaxis = list(title = "Year"), yaxis = list(title = "Weight (kg)"),
+         title = "Top 8 Sources by Weight (kg)")
+
+line_chart
+
+```
+
+#### 4.5.2 Value of Goods USD
+
+```{r}
+#| code-fold: true
+#| code-summary: "Show code"
+#Define years
+start_year <- 2028
+end_year <- 2034
+
+#Create empty data frame to store the data for each year
+df_valueofgoodsusd_sources <- data.frame(year = numeric(),
+                   source = character(),
+                   valueofgoodsusd = numeric(),
+                   stringsAsFactors = FALSE)
+
+#Loop over the years
+for (year_filter in start_year:end_year) {
+  #Filter the data for the current year
+  MC2_edges_filtered <- filter(MC2_edges, year == year_filter)
+  
+  #Group the filtered data by source and calculate the total weight
+  top8_by_source <- MC2_edges_filtered %>%
+    group_by(source) %>%
+    summarize(valueofgoodsusd = sum(valueofgoodsusd)) %>%
+    arrange(desc(valueofgoodsusd)) %>%
+    top_n(8)
+  
+  #Add the year to the data frame
+  top8_by_source$year <- year_filter
+  
+  #Append the data for the current year to the overall data frame
+  df_valueofgoodsusd_sources <- bind_rows(df_valueofgoodsusd_sources, top8_by_source)
+}
+
+line_chart <- df_valueofgoodsusd_sources %>%
+  plot_ly(x = ~year, y = ~valueofgoodsusd, color = ~source, type = "scatter", mode = "lines+markers",
+          colors = c("#1B9E77", "#D95F02", "#7570B3", "#E7298A", "#66A61E", "#E6AB02", "#A6761D", "#666666"),
+          text = ~paste("Source: ", source, "<br>Weight: ", valueofgoodsusd, " kg")) %>%
+  layout(xaxis = list(title = "Year"), yaxis = list(title = "valueofgoodsusd"),
+         title = "Top 8 Sources by valueofgoodsusd")
+
+line_chart
+```
+
+### 4.6 Top 8 Targets across the Years by varying metrics
+Within this section, we take a look a the top 8 targets across the years by weightkg and value of goods usd. We looped over the years to calculate the top 8 targets by the relevant metrics for each year, before leveraging on plot_ly() to create a line chart to visualise the trends over the years.
+
+#### 4.6.1 Weightkg
+
+```{r}
+#| code-fold: true
+#| code-summary: "Show code"
+#Define years
+start_year <- 2028
+end_year <- 2034
+
+#Create empty data frame to store the data for each year
+df_weightkg_targets <- data.frame(year = numeric(),
+                   target = character(),
+                   weightkg = numeric(),
+                   stringsAsFactors = FALSE)
+
+#Loop over the years
+for (year_filter in start_year:end_year) {
+  #Filter the data for the current year
+  MC2_edges_filtered <- filter(MC2_edges, year == year_filter)
+  
+  #Group the filtered data by target and calculate the total weight
+  top8_by_target <- MC2_edges_filtered %>%
+    group_by(target) %>%
+    summarize(weightkg = sum(weightkg)) %>%
+    arrange(desc(weightkg)) %>%
+    top_n(8)
+  
+  #Add the year to the data frame
+  top8_by_target$year <- year_filter
+  
+  #Append the data for the current year to the overall data frame
+  df_weightkg_targets <- bind_rows(df_weightkg_targets, top8_by_target)
+}
+
+line_chart <- df_weightkg_targets %>%
+  plot_ly(x = ~year, y = ~weightkg, color = ~target, type = "scatter", mode = "lines+markers",
+          colors = c("#1B9E77", "#D95F02", "#7570B3", "#E7298A", "#66A61E", "#E6AB02", "#A6761D", "#666666"),
+          text = ~paste("Target: ", target, "<br>Weight: ", weightkg, " kg")) %>%
+  layout(xaxis = list(title = "Year"), yaxis = list(title = "Weight (kg)"),
+         title = "Top 8 Targets by Weight (kg)")
+
+line_chart
+
+```
+
+#### 4.6.2 Value of Goods USD
+
+```{r}
+#| code-fold: true
+#| code-summary: "Show code"
+#Define years
+start_year <- 2028
+end_year <- 2034
+
+#Create empty data frame to store the data for each year
+df_valueofgoodsusd_targets <- data.frame(year = numeric(),
+                   target = character(),
+                   valueofgoodsusd = numeric(),
+                   stringsAsFactors = FALSE)
+
+#Loop over the years
+for (year_filter in start_year:end_year) {
+  # Filter the data for the current year
+  MC2_edges_filtered <- filter(MC2_edges, year == year_filter)
+  
+  #Group filtered data by source and calculate the total weight
+  top8_by_target <- MC2_edges_filtered %>%
+    group_by(target) %>%
+    summarize(valueofgoodsusd = sum(valueofgoodsusd)) %>%
+    arrange(desc(valueofgoodsusd)) %>%
+    top_n(8)
+  
+  #Add the year to the data frame
+  top8_by_target$year <- year_filter
+  
+  #Append the data for the current year to the overall data frame
+  df_valueofgoodsusd_targets <- bind_rows(df_valueofgoodsusd_targets, top8_by_target)
+}
+
+line_chart <- df_valueofgoodsusd_targets %>%
+  plot_ly(x = ~year, y = ~valueofgoodsusd, color = ~target, type = "scatter", mode = "lines+markers",
+          colors = c("#1B9E77", "#D95F02", "#7570B3", "#E7298A", "#66A61E", "#E6AB02", "#A6761D", "#666666"),
+          text = ~paste("Target: ", target, "<br>Weight: ", valueofgoodsusd, " kg")) %>%
+  layout(xaxis = list(title = "Year"), yaxis = list(title = "valueofgoodsusd"),
+         title = "Top 8 Target by valueofgoodsusd")
+
+line_chart
+```
+
+With the above Exploratory Data Analysis setting a good foundation for further visualisation on the network graph, we first begin by preparing the edges and nodes properly per code chunks below:
+
+The below code chunk creates a new MC2_edges_cleaned factoring in the below:
+
+-   creation of new column called weight that counts the number of times the source and target connects in a year
+
+-   creation of new column called noofunique_targets that counts the number of unique source target relationship
+
+-   filter away records where source is not equal to target
+
+-   select all records where weights existing in the top 95 percentile
+
+```{r}
+#| code-fold: true
+#| code-summary: "Show code"
+MC2_edges_weight <- MC2_edges %>%
+  filter(hscode == "306170" | hscode == "304620" | hscode == "160414") %>%
+  group_by(source, target, hscode, year) %>%
+  summarise(weights = n(), .groups = "drop") %>%
+  filter(source != target) %>%
+  ungroup() %>%
+  group_by(source) %>%
+  mutate(noofunique_targets = n_distinct(target)) %>%
+  #filter(weights > 20) %>%
+  ungroup() %>%
+  filter(weights >= quantile(weights, 0.95))
+```
+
+Thereafter, the below code chunk creates "MC2_nodes_extracted" data table to ensure that the nodes in nodes data table includes all the source and target values. Therefore, a join is performed to populate shpcountry and rcvcountery back to the "MC2_nodes_extracted" data table.
+
+```{r}
+#| code-fold: true
+#| code-summary: "Show code"
+id1_weight <- MC2_edges_weight %>%
+  select(source) %>%
+  rename(id = source)
+id2_weight <- MC2_edges_weight %>%
+  select(target) %>%
+  rename(id = target)
+
+MC2_nodes_extracted_weight <- rbind(id1_weight, id2_weight) %>%
+  distinct()
+
+MC2_nodes_extracted_weight <- left_join(MC2_nodes_extracted_weight, MC2_nodes_cleaned, by = "id")
+```
+
+A check can also be performed to ensure that all source and targets within MC2_edges_cleaned are found in MC2_nodes_extracted.
+
+```{r}
+#| code-fold: true
+#| code-summary: "Show code"
+# Check if sources and targets within MC2_edges_cleaned are found in MC2_nodes_extracted$id
+sources_check_weight <- MC2_edges_weight$source %in% MC2_nodes_extracted_weight$id
+targets_check_weight <- MC2_edges_weight$target %in% MC2_nodes_extracted_weight$id
+sources_found_weight <- all(sources_check_weight)
+targets_found_weight <- all(targets_check_weight)
+
+cat("All sources found in MC2_nodes_extracted_weight 'id':", sources_found_weight, "\n")
+cat("All targets found in MC2_nodes_extracted_weight 'id':", targets_found_weight, "\n")
+
+```
+
+## 5. Community/Cluster Detection
+
+In the section below, we plot a basic static graph to gain an overall view of the node edge connection to better understand and detect communities/clusters. "fr" (Fruchterman-Reingold) layout was utilised as it is a special force directed layout where nodes are drawn closer to nodes they are connected to. A total of three methods were explored, namely: infomap clustering, leading eigen clustering and group components.
+
+The below shows the code for plotting a infomap cluster which is suitable for both directed and undirected graph.
+
+::: panel-tabset
+### 5.1 Infomap Clustering
+
+```{r}
+#| echo: false
+# Create the directed graph
+MC2_graph_directed_informap <- tbl_graph(nodes = MC2_nodes_extracted_weight, 
+                                         edges = MC2_edges_weight, 
+                                         directed = TRUE)
+
+# Convert the graph to an igraph object
+igraph_object <- as.igraph(MC2_graph_directed_informap)
+
+# Apply the Infomap algorithm for community detection
+infomap_result <- infomap.community(igraph_object)
+
+# Get the community membership of nodes
+membership <- membership(infomap_result)
+
+# Visualize the graph with community colors
+ggraph(MC2_graph_directed_informap, layout = "fr") +
+  geom_edge_link(color = "grey", alpha = 0.7, arrow = arrow(length = unit(0.015, "npc"))) +
+  geom_node_point(aes(color = as.factor(membership))) +
+  scale_color_discrete(name = "Community") +
+  theme(legend.position = "right",
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.ticks = element_blank(),
+        axis.text = element_blank(),
+        axis.title = element_blank(),
+        panel.background = element_rect(fill = "white"),
+        plot.title = element_text(hjust = 0.5)) +
+  labs(title = "Community Detection using Infomap")
+```
+
+### Code Chunk
+
+```{r}
+#| eval: false
+# Create the directed graph
+MC2_graph_directed_informap <- tbl_graph(nodes = MC2_nodes_extracted_weight, 
+                                         edges = MC2_edges_weight, 
+                                         directed = TRUE)
+
+# Convert the graph to an igraph object
+igraph_object <- as.igraph(MC2_graph_directed_informap)
+
+# Apply the Infomap algorithm for community detection
+infomap_result <- infomap.community(igraph_object)
+
+# Get the community membership of nodes
+membership <- membership(infomap_result)
+
+# Visualize the graph with community colors
+ggraph(MC2_graph_directed_informap, layout = "fr") +
+  geom_edge_link(color = "grey", alpha = 0.7, arrow = arrow(length = unit(0.015, "npc"))) +
+  geom_node_point(aes(color = as.factor(membership))) +
+  scale_color_discrete(name = "Community") +
+  theme(legend.position = "right",
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.ticks = element_blank(),
+        axis.text = element_blank(),
+        axis.title = element_blank(),
+        panel.background = element_rect(fill = "white"),
+        plot.title = element_text(hjust = 0.5)) +
+  labs(title = "Community Detection using Infomap")
+```
+:::
+
+The below shows the code for plotting a group components plot which primarily groups by connected components.
+
+::: panel-tabset
+### 5.2 Group Components
+
+```{r}
+#| echo: false
+set.seed(123)
+MC2_graph_groupcomponents <- tbl_graph(nodes = MC2_nodes_extracted_weight, 
+                                       edges = MC2_edges_weight, 
+                                       directed = TRUE)
+
+MC2_graph_groupcomponents <- MC2_graph_groupcomponents %>%
+  activate(nodes) %>%
+  mutate(group_component = group_components())
+
+# Visualize the filtered graph using ggraph
+ggraph(MC2_graph_groupcomponents, layout = "fr") +
+  geom_edge_link(arrow = arrow(length = unit(0.02, "npc"))) +
+  geom_node_point(aes(color = as.factor(group_component))) +
+  scale_color_discrete(name = "Group Component") +
+  theme(legend.position = "right",
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.ticks = element_blank(),
+        axis.text = element_blank(),
+        axis.title = element_blank(),
+        panel.background = element_rect(fill = "white"),
+        plot.title = element_text(hjust = 0.5)) +
+  labs(title = "Clustering based on Group Components")
+```
+
+### Code Chunk
+
+```{r}
+#| eval: false
+set.seed(123)
+MC2_graph_groupcomponents <- tbl_graph(nodes = MC2_nodes_extracted_weight, 
+                                       edges = MC2_edges_weight, 
+                                       directed = TRUE)
+
+MC2_graph_groupcomponents <- MC2_graph_groupcomponents %>%
+  activate(nodes) %>%
+  mutate(group_component = group_components())
+
+# Visualize the filtered graph using ggraph
+ggraph(MC2_graph_groupcomponents, layout = "fr") +
+  geom_edge_link(arrow = arrow(length = unit(0.02, "npc"))) +
+  geom_node_point(aes(color = as.factor(group_component))) +
+  scale_color_discrete(name = "Group Component") +
+  theme(legend.position = "right",
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.ticks = element_blank(),
+        axis.text = element_blank(),
+        axis.title = element_blank(),
+        panel.background = element_rect(fill = "white"),
+        plot.title = element_text(hjust = 0.5)) +
+  labs(title = "Clustering based on Group Components")
+```
+:::
+
+Finally, the below shows the plot for leading eigen cluster which groups nodes based on the leading eigenvector of the modularity matrix.
+
+::: panel-tabset
+### 5.3 Leading Eigen Clustering
+
+```{r}
+#| echo: false
+set.seed(123)
+
+# Create the graph with filtered edges
+MC2_graph_undirected_eigen <- tbl_graph(nodes = MC2_nodes_extracted_weight, 
+                                        edges = MC2_edges_weight, 
+                                        directed = TRUE)
+
+# Convert the tbl_graph to an igraph object
+MC2_igraph_undirected_eigen <- as.igraph(MC2_graph_undirected_eigen)
+
+# Extract & weaves the edge weights from the MC2_edges_weight dataset
+edge_weights <- MC2_edges_weight$weights
+E(MC2_igraph_undirected_eigen)$weight <- edge_weights
+
+# Perform leading eigenvector community detection
+eigen_groups <- cluster_leading_eigen(MC2_igraph_undirected_eigen, 
+                                      weights = E(MC2_igraph_undirected_eigen)$weight)
+
+# Assign categories based on the groups
+eigen_cluster <- as.character(eigen_groups$membership)
+
+# Visualize the graph using ggraph
+ggraph(MC2_graph_undirected_eigen, layout = "fr") +
+  geom_edge_link(color = "grey", alpha = 0.7, arrow = arrow(length = unit(0.015, "npc"))) +
+  geom_node_point(aes(color = eigen_cluster)) +
+  scale_color_manual(values = rainbow(length(unique(eigen_groups$membership)))) +
+  theme(legend.position = "right",
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.ticks = element_blank(),
+        axis.text = element_blank(),
+        axis.title = element_blank(),
+        panel.background = element_rect(fill = "white"),
+        plot.title = element_text(hjust = 0.5)) +
+  labs(title = "Clustering based on Eigenvector Centrality")
+
+```
+
+### Code Chunk
+
+```{r}
+#| eval: false
+set.seed(123)
+
+# Create the graph with filtered edges
+MC2_graph_undirected_eigen <- tbl_graph(nodes = MC2_nodes_extracted_weight, 
+                                        edges = MC2_edges_weight, 
+                                        directed = TRUE)
+
+# Convert the tbl_graph to an igraph object
+MC2_igraph_undirected_eigen <- as.igraph(MC2_graph_undirected_eigen)
+
+# Extract & weaves the edge weights from the MC2_edges_weight dataset
+edge_weights <- MC2_edges_weight$weights
+E(MC2_igraph_undirected_eigen)$weight <- edge_weights
+
+# Perform leading eigenvector community detection
+eigen_groups <- cluster_leading_eigen(MC2_igraph_undirected_eigen, 
+                                      weights = E(MC2_igraph_undirected_eigen)$weight)
+
+# Assign categories based on the groups
+eigen_cluster <- as.character(eigen_groups$membership)
+
+# Visualize the graph using ggraph
+ggraph(MC2_graph_undirected_eigen, layout = "fr") +
+  geom_edge_link(color = "grey", alpha = 0.7, arrow = arrow(length = unit(0.015, "npc"))) +
+  geom_node_point(aes(color = eigen_cluster)) +
+  scale_color_manual(values = rainbow(length(unique(eigen_groups$membership)))) +
+  theme(legend.position = "right",
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.ticks = element_blank(),
+        axis.text = element_blank(),
+        axis.title = element_blank(),
+        panel.background = element_rect(fill = "white"),
+        plot.title = element_text(hjust = 0.5)) +
+  labs(title = "Clustering based on Eigenvector Centrality")
+
+```
+:::
+
+## 6.1 In-Degree Centrality by Years
+Within this section, we will leverage on degree centrality and ggraph to plot a static network graph. Indegree centrality is defined in the below code via mode = "in". Note that the dataset is furthered focused into a smaller subset in the below section as we are filtering for weights which are >= quantile 0.8. 
+
+Within the code outlined in Code Chunk below, we have also defined a node to be a "Central Carrier" if it's above a threshold currently defined at 2. If otherwise, then the node will be defined as "Fishing Vessel". This value was arrived after a few trial and errors before deciding that this was an optimal value. This helps us to detect transshipments which are frequent perpetrators of IUU fishing occuring out at sea.
+
+::: panel-tabset
+### 2028
+
+```{r}
+#| echo: false
+set.seed(123)
+
+MC2_edges_weight_2028_indegree <- MC2_edges %>%
+  filter(year == 2028) %>%
+  filter(hscode == "306170" | hscode == "304620" | hscode == "160414") %>%
+  group_by(source, target, hscode, year) %>%
+  summarise(weights = n(), .groups = "drop") %>%
+  filter(source != target) %>%
+  ungroup() %>%
+  group_by(source) %>%
+  mutate(noofunique_targets = n_distinct(target)) %>%
+  ungroup() %>%
+  filter(weights >= quantile(weights, 0.80)) #or filter for unique target
+
+id1_weight_2028_indegree <- MC2_edges_weight_2028_indegree %>%
+  select(source) %>%
+  rename(id = source)
+id2_weight_2028_indegree <- MC2_edges_weight_2028_indegree %>%
+  select(target) %>%
+  rename(id = target)
+
+MC2_nodes_extracted_weight_2028_indegree <- rbind(id1_weight_2028_indegree, id2_weight_2028_indegree) %>% 
+  distinct()
+
+MC2_nodes_extracted_weight_2028_indegree <- left_join(MC2_nodes_extracted_weight_2028_indegree, MC2_nodes_cleaned, by = "id")
+
+# Create the graph
+MC2_graph_weights_2028_indegree <- tbl_graph(nodes=MC2_nodes_extracted_weight_2028_indegree,
+                                             edges = MC2_edges_weight_2028_indegree, 
+                                             directed = TRUE)
+
+# Calculate degree centrality & define threshold to assign nodes to either Central Carrier or Fishing Vessel
+indegree_centrality_2028 <- degree(MC2_graph_weights_2028_indegree, mode = "in")
+indegree_threshold_2028 <- 2
+
+# Set size to degree centrality
+V(MC2_graph_weights_2028_indegree)$size <- indegree_centrality_2028
+
+# Assign categories based on centrality measures
+indegree_categories_2028 <- ifelse(indegree_centrality_2028 > indegree_threshold_2028, "Central Carrier", "Fishing Vessel")
+
+# Store category information in MC2_nodes_extracted_weight_2028
+MC2_nodes_extracted_weight_2028_indegree$category <- indegree_categories_2028
+
+# Get top nodes based on degree centrality
+top_nodes_2028 <- MC2_nodes_extracted_weight_2028_indegree %>%
+  top_n(50, indegree_centrality_2028)
+
+# Visualize the filtered graph using ggraph
+ggraph(MC2_graph_weights_2028_indegree, layout = "fr") +
+  geom_edge_link(arrow = arrow(length = unit(0.02, "npc"))) +
+  geom_node_point(aes(color = indegree_categories_2028, size = size)) +
+  scale_color_manual(values = c("Central Carrier" = "red", "Fishing Vessel" = "grey")) +
+  scale_size_continuous(range = c(1, 2)) +
+  theme(legend.position = "right",
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.ticks = element_blank(),
+        axis.text = element_blank(),
+        axis.title = element_blank(),
+        panel.background = element_rect(fill = "white"),
+        plot.title = element_text(hjust = 0.5)) +
+  labs(title = "2028 Graph based on In-Degree Centrality")
+```
+
+### 2029
+
+```{r}
+#| echo: false
+set.seed(123)
+
+MC2_edges_weight_2029_indegree <- MC2_edges %>%
+  filter(year == 2029) %>%
+  filter(hscode == "306170" | hscode == "304620" | hscode == "160414") %>%
+  group_by(source, target, hscode, year) %>%
+  summarise(weights = n(), .groups = "drop") %>%
+  filter(source != target) %>%
+  ungroup() %>%
+  group_by(source) %>%
+  mutate(noofunique_targets = n_distinct(target)) %>%
+  ungroup() %>%
+  filter(weights >= quantile(weights, 0.80)) #or filter for unique target
+
+id1_weight_2029_indegree <- MC2_edges_weight_2029_indegree %>%
+  select(source) %>%
+  rename(id = source)
+id2_weight_2029_indegree <- MC2_edges_weight_2029_indegree %>%
+  select(target) %>%
+  rename(id = target)
+
+MC2_nodes_extracted_weight_2029_indegree <- rbind(id1_weight_2029_indegree, id2_weight_2029_indegree) %>% 
+  distinct()
+
+MC2_nodes_extracted_weight_2029_indegree <- left_join(MC2_nodes_extracted_weight_2029_indegree, MC2_nodes_cleaned, by = "id")
+
+# Create the graph
+MC2_graph_weights_2029_indegree <- tbl_graph(nodes=MC2_nodes_extracted_weight_2029_indegree,
+                                             edges = MC2_edges_weight_2029_indegree, 
+                                             directed = TRUE)
+
+# Calculate degree centrality & define threshold to assign nodes to either Central Carrier or Fishing Vessel
+indegree_centrality_2029 <- degree(MC2_graph_weights_2029_indegree, mode = "in")
+indegree_threshold_2029 <- 2
+
+# Set size to degree centrality
+V(MC2_graph_weights_2029_indegree)$size <- indegree_centrality_2029
+
+# Assign categories based on centrality measures
+indegree_categories_2029 <- ifelse(indegree_centrality_2029 > indegree_threshold_2029, "Central Carrier", "Fishing Vessel")
+
+# Store category information in MC2_nodes_extracted_weight_2029
+MC2_nodes_extracted_weight_2029_indegree$category <- indegree_categories_2029
+
+# Get top nodes based on degree centrality
+top_nodes_2029 <- MC2_nodes_extracted_weight_2029_indegree %>%
+  top_n(50, indegree_centrality_2029)
+
+# Visualize the filtered graph using ggraph
+ggraph(MC2_graph_weights_2029_indegree, layout = "fr") +
+  geom_edge_link(arrow = arrow(length = unit(0.02, "npc"))) +
+  geom_node_point(aes(color = indegree_categories_2029, size = size)) +
+  scale_color_manual(values = c("Central Carrier" = "red", "Fishing Vessel" = "grey")) +
+  scale_size_continuous(range = c(1, 2)) +
+  theme(legend.position = "right",
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.ticks = element_blank(),
+        axis.text = element_blank(),
+        axis.title = element_blank(),
+        panel.background = element_rect(fill = "white"),
+        plot.title = element_text(hjust = 0.5)) +
+  labs(title = "2029 Graph based on In-Degree Centrality")
+```
+
+### 2030
+
+```{r}
+#| echo: false
+set.seed(123)
+
+MC2_edges_weight_2030_indegree <- MC2_edges %>%
+  filter(year == 2030) %>%
+  filter(hscode == "306170" | hscode == "304620" | hscode == "160414") %>%
+  group_by(source, target, hscode, year) %>%
+  summarise(weights = n(), .groups = "drop") %>%
+  filter(source != target) %>%
+  ungroup() %>%
+  group_by(source) %>%
+  mutate(noofunique_targets = n_distinct(target)) %>%
+  ungroup() %>%
+  filter(weights >= quantile(weights, 0.80)) #or filter for unique target
+
+id1_weight_2030_indegree <- MC2_edges_weight_2030_indegree %>%
+  select(source) %>%
+  rename(id = source)
+id2_weight_2030_indegree <- MC2_edges_weight_2030_indegree %>%
+  select(target) %>%
+  rename(id = target)
+
+MC2_nodes_extracted_weight_2030_indegree <- rbind(id1_weight_2030_indegree, id2_weight_2030_indegree) %>% 
+  distinct()
+
+MC2_nodes_extracted_weight_2030_indegree <- left_join(MC2_nodes_extracted_weight_2030_indegree, MC2_nodes_cleaned, by = "id")
+
+# Create the graph
+MC2_graph_weights_2030_indegree <- tbl_graph(nodes=MC2_nodes_extracted_weight_2030_indegree,
+                                             edges = MC2_edges_weight_2030_indegree, 
+                                             directed = TRUE)
+
+# Calculate degree centrality & define threshold to assign nodes to either Central Carrier or Fishing Vessel
+indegree_centrality_2030 <- degree(MC2_graph_weights_2030_indegree, mode = "in")
+indegree_threshold_2030 <- 2
+
+# Set size to degree centrality
+V(MC2_graph_weights_2030_indegree)$size <- indegree_centrality_2030
+
+# Assign categories based on centrality measures
+indegree_categories_2030 <- ifelse(indegree_centrality_2030 > indegree_threshold_2030, "Central Carrier", "Fishing Vessel")
+
+# Store category information in MC2_nodes_extracted_weight_2030
+MC2_nodes_extracted_weight_2030_indegree$category <- indegree_categories_2030
+
+# Get top nodes based on degree centrality
+top_nodes_2030 <- MC2_nodes_extracted_weight_2030_indegree %>%
+  top_n(50, indegree_centrality_2030)
+
+# Visualize the filtered graph using ggraph
+ggraph(MC2_graph_weights_2030_indegree, layout = "fr") +
+  geom_edge_link(arrow = arrow(length = unit(0.02, "npc"))) +
+  geom_node_point(aes(color = indegree_categories_2030, size = size)) +
+  scale_color_manual(values = c("Central Carrier" = "red", "Fishing Vessel" = "grey")) +
+  scale_size_continuous(range = c(1, 2)) +
+  theme(legend.position = "right",
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.ticks = element_blank(),
+        axis.text = element_blank(),
+        axis.title = element_blank(),
+        panel.background = element_rect(fill = "white"),
+        plot.title = element_text(hjust = 0.5)) +
+  labs(title = "2030 Graph based on In-Degree Centrality")
+```
+
+### 2031
+
+```{r}
+#| echo: false
+set.seed(123)
+
+MC2_edges_weight_2031_indegree <- MC2_edges %>%
+  filter(year == 2031) %>%
+  filter(hscode == "306170" | hscode == "304620" | hscode == "160414") %>%
+  group_by(source, target, hscode, year) %>%
+  summarise(weights = n(), .groups = "drop") %>%
+  filter(source != target) %>%
+  ungroup() %>%
+  group_by(source) %>%
+  mutate(noofunique_targets = n_distinct(target)) %>%
+  ungroup() %>%
+  filter(weights >= quantile(weights, 0.80)) #or filter for unique target
+
+id1_weight_2031_indegree <- MC2_edges_weight_2031_indegree %>%
+  select(source) %>%
+  rename(id = source)
+id2_weight_2031_indegree <- MC2_edges_weight_2031_indegree %>%
+  select(target) %>%
+  rename(id = target)
+
+MC2_nodes_extracted_weight_2031_indegree <- rbind(id1_weight_2031_indegree, id2_weight_2031_indegree) %>% 
+  distinct()
+
+MC2_nodes_extracted_weight_2031_indegree <- left_join(MC2_nodes_extracted_weight_2031_indegree, MC2_nodes_cleaned, by = "id")
+
+# Create the graph
+MC2_graph_weights_2031_indegree <- tbl_graph(nodes=MC2_nodes_extracted_weight_2031_indegree,
+                                             edges = MC2_edges_weight_2031_indegree, 
+                                             directed = TRUE)
+
+# Calculate degree centrality & define threshold to assign nodes to either Central Carrier or Fishing Vessel
+indegree_centrality_2031 <- degree(MC2_graph_weights_2031_indegree, mode = "in")
+indegree_threshold_2031 <- 2
+
+# Set size to degree centrality
+V(MC2_graph_weights_2031_indegree)$size <- indegree_centrality_2031
+
+# Assign categories based on centrality measures
+indegree_categories_2031 <- ifelse(indegree_centrality_2031 > indegree_threshold_2031, "Central Carrier", "Fishing Vessel")
+
+# Store category information in MC2_nodes_extracted_weight_2031
+MC2_nodes_extracted_weight_2031_indegree$category <- indegree_categories_2031
+
+# Get top nodes based on degree centrality
+top_nodes_2031 <- MC2_nodes_extracted_weight_2031_indegree %>%
+  top_n(50, indegree_centrality_2031)
+
+# Visualize the filtered graph using ggraph
+ggraph(MC2_graph_weights_2031_indegree, layout = "fr") +
+  geom_edge_link(arrow = arrow(length = unit(0.02, "npc"))) +
+  geom_node_point(aes(color = indegree_categories_2031, size = size)) +
+  scale_color_manual(values = c("Central Carrier" = "red", "Fishing Vessel" = "grey")) +
+  scale_size_continuous(range = c(1, 2)) +
+  theme(legend.position = "right",
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.ticks = element_blank(),
+        axis.text = element_blank(),
+        axis.title = element_blank(),
+        panel.background = element_rect(fill = "white"),
+        plot.title = element_text(hjust = 0.5)) +
+  labs(title = "2031 Graph based on In-Degree Centrality")
+```
+
+### 2032
+
+```{r}
+#| echo: false
+set.seed(123)
+
+MC2_edges_weight_2032_indegree <- MC2_edges %>%
+  filter(year == 2032) %>%
+  filter(hscode == "306170" | hscode == "304620" | hscode == "160414") %>%
+  group_by(source, target, hscode, year) %>%
+  summarise(weights = n(), .groups = "drop") %>%
+  filter(source != target) %>%
+  ungroup() %>%
+  group_by(source) %>%
+  mutate(noofunique_targets = n_distinct(target)) %>%
+  ungroup() %>%
+  filter(weights >= quantile(weights, 0.80)) #or filter for unique target
+
+id1_weight_2032_indegree <- MC2_edges_weight_2032_indegree %>%
+  select(source) %>%
+  rename(id = source)
+id2_weight_2032_indegree <- MC2_edges_weight_2032_indegree %>%
+  select(target) %>%
+  rename(id = target)
+
+MC2_nodes_extracted_weight_2032_indegree <- rbind(id1_weight_2032_indegree, id2_weight_2032_indegree) %>% 
+  distinct()
+
+MC2_nodes_extracted_weight_2032_indegree <- left_join(MC2_nodes_extracted_weight_2032_indegree, MC2_nodes_cleaned, by = "id")
+
+# Create the graph
+MC2_graph_weights_2032_indegree <- tbl_graph(nodes=MC2_nodes_extracted_weight_2032_indegree,
+                                             edges = MC2_edges_weight_2032_indegree, 
+                                             directed = TRUE)
+
+# Calculate degree centrality & define threshold to assign nodes to either Central Carrier or Fishing Vessel
+indegree_centrality_2032 <- degree(MC2_graph_weights_2032_indegree, mode = "in")
+indegree_threshold_2032 <- 2
+
+# Set size to degree centrality
+V(MC2_graph_weights_2032_indegree)$size <- indegree_centrality_2032
+
+# Assign categories based on centrality measures
+indegree_categories_2032 <- ifelse(indegree_centrality_2032 > indegree_threshold_2032, "Central Carrier", "Fishing Vessel")
+
+# Store category information in MC2_nodes_extracted_weight_2032
+MC2_nodes_extracted_weight_2032_indegree$category <- indegree_categories_2032
+
+# Get top nodes based on degree centrality
+top_nodes_2032 <- MC2_nodes_extracted_weight_2032_indegree %>%
+  top_n(50, indegree_centrality_2032)
+
+# Visualize the filtered graph using ggraph
+ggraph(MC2_graph_weights_2032_indegree, layout = "fr") +
+  geom_edge_link(arrow = arrow(length = unit(0.02, "npc"))) +
+  geom_node_point(aes(color = indegree_categories_2032, size = size)) +
+  scale_color_manual(values = c("Central Carrier" = "red", "Fishing Vessel" = "grey")) +
+  scale_size_continuous(range = c(1, 2)) +
+  theme(legend.position = "right",
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.ticks = element_blank(),
+        axis.text = element_blank(),
+        axis.title = element_blank(),
+        panel.background = element_rect(fill = "white"),
+        plot.title = element_text(hjust = 0.5)) +
+  labs(title = "2032 Graph based on In-Degree Centrality")
+```
+
+### 2033
+
+```{r}
+#| echo: false
+set.seed(123)
+
+MC2_edges_weight_2033_indegree <- MC2_edges %>%
+  filter(year == 2033) %>%
+  filter(hscode == "306170" | hscode == "304620" | hscode == "160414") %>%
+  group_by(source, target, hscode, year) %>%
+  summarise(weights = n(), .groups = "drop") %>%
+  filter(source != target) %>%
+  ungroup() %>%
+  group_by(source) %>%
+  mutate(noofunique_targets = n_distinct(target)) %>%
+  ungroup() %>%
+  filter(weights >= quantile(weights, 0.80)) #or filter for unique target
+
+id1_weight_2033_indegree <- MC2_edges_weight_2033_indegree %>%
+  select(source) %>%
+  rename(id = source)
+id2_weight_2033_indegree <- MC2_edges_weight_2033_indegree %>%
+  select(target) %>%
+  rename(id = target)
+
+MC2_nodes_extracted_weight_2033_indegree <- rbind(id1_weight_2033_indegree, id2_weight_2033_indegree) %>% 
+  distinct()
+
+MC2_nodes_extracted_weight_2033_indegree <- left_join(MC2_nodes_extracted_weight_2033_indegree, MC2_nodes_cleaned, by = "id")
+
+# Create the graph
+MC2_graph_weights_2033_indegree <- tbl_graph(nodes=MC2_nodes_extracted_weight_2033_indegree,
+                                             edges = MC2_edges_weight_2033_indegree, 
+                                             directed = TRUE)
+
+# Calculate degree centrality & define threshold to assign nodes to either Central Carrier or Fishing Vessel
+indegree_centrality_2033 <- degree(MC2_graph_weights_2033_indegree, mode = "in")
+indegree_threshold_2033 <- 2
+
+# Set size to degree centrality
+V(MC2_graph_weights_2033_indegree)$size <- indegree_centrality_2033
+
+# Assign categories based on centrality measures
+indegree_categories_2033 <- ifelse(indegree_centrality_2033 > indegree_threshold_2033, "Central Carrier", "Fishing Vessel")
+
+# Store category information in MC2_nodes_extracted_weight_2033
+MC2_nodes_extracted_weight_2033_indegree$category <- indegree_categories_2033
+
+# Get top nodes based on degree centrality
+top_nodes_2033 <- MC2_nodes_extracted_weight_2033_indegree %>%
+  top_n(50, indegree_centrality_2033)
+
+# Visualize the filtered graph using ggraph
+ggraph(MC2_graph_weights_2033_indegree, layout = "fr") +
+  geom_edge_link(arrow = arrow(length = unit(0.02, "npc"))) +
+  geom_node_point(aes(color = indegree_categories_2033, size = size)) +
+  scale_color_manual(values = c("Central Carrier" = "red", "Fishing Vessel" = "grey")) +
+  scale_size_continuous(range = c(1, 2)) +
+  theme(legend.position = "right",
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.ticks = element_blank(),
+        axis.text = element_blank(),
+        axis.title = element_blank(),
+        panel.background = element_rect(fill = "white"),
+        plot.title = element_text(hjust = 0.5)) +
+  labs(title = "2033 Graph based on In-Degree Centrality")
+```
+
+### 2034
+
+```{r}
+#| echo: false
+set.seed(123)
+
+MC2_edges_weight_2034_indegree <- MC2_edges %>%
+  filter(year == 2034) %>%
+  filter(hscode == "306170" | hscode == "304620" | hscode == "160414") %>%
+  group_by(source, target, hscode, year) %>%
+  summarise(weights = n(), .groups = "drop") %>%
+  filter(source != target) %>%
+  ungroup() %>%
+  group_by(source) %>%
+  mutate(noofunique_targets = n_distinct(target)) %>%
+  ungroup() %>%
+  filter(weights >= quantile(weights, 0.80)) #or filter for unique target
+
+id1_weight_2034_indegree <- MC2_edges_weight_2034_indegree %>%
+  select(source) %>%
+  rename(id = source)
+id2_weight_2034_indegree <- MC2_edges_weight_2034_indegree %>%
+  select(target) %>%
+  rename(id = target)
+
+MC2_nodes_extracted_weight_2034_indegree <- rbind(id1_weight_2034_indegree, id2_weight_2034_indegree) %>% 
+  distinct()
+
+MC2_nodes_extracted_weight_2034_indegree <- left_join(MC2_nodes_extracted_weight_2034_indegree, MC2_nodes_cleaned, by = "id")
+
+# Create the graph
+MC2_graph_weights_2034_indegree <- tbl_graph(nodes=MC2_nodes_extracted_weight_2034_indegree,
+                                             edges = MC2_edges_weight_2034_indegree, 
+                                             directed = TRUE)
+
+# Calculate degree centrality & define threshold to assign nodes to either Central Carrier or Fishing Vessel
+indegree_centrality_2034 <- degree(MC2_graph_weights_2034_indegree, mode = "in")
+indegree_threshold_2034 <- 2
+
+# Set size to degree centrality
+V(MC2_graph_weights_2034_indegree)$size <- indegree_centrality_2034
+
+# Assign categories based on centrality measures
+indegree_categories_2034 <- ifelse(indegree_centrality_2034 > indegree_threshold_2034, "Central Carrier", "Fishing Vessel")
+
+# Store category information in MC2_nodes_extracted_weight_2034
+MC2_nodes_extracted_weight_2034_indegree$category <- indegree_categories_2034
+
+# Get top nodes based on degree centrality
+top_nodes_2034 <- MC2_nodes_extracted_weight_2034_indegree %>%
+  top_n(50, indegree_centrality_2034)
+
+# Visualize the filtered graph using ggraph
+ggraph(MC2_graph_weights_2034_indegree, layout = "fr") +
+  geom_edge_link(arrow = arrow(length = unit(0.02, "npc"))) +
+  geom_node_point(aes(color = indegree_categories_2034, size = size)) +
+  scale_color_manual(values = c("Central Carrier" = "red", "Fishing Vessel" = "grey")) +
+  scale_size_continuous(range = c(1, 2)) +
+  theme(legend.position = "right",
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.ticks = element_blank(),
+        axis.text = element_blank(),
+        axis.title = element_blank(),
+        panel.background = element_rect(fill = "white"),
+        plot.title = element_text(hjust = 0.5)) +
+  labs(title = "2034 Graph based on In-Degree Centrality")
+```
+
+### Code Chunk
+
+The below shows a sample code chunk of how we can plot for the year 2028. Users need to take note to configure it to the respective years they are looking to analyse.
+
+```{r}
+#| eval: false
+set.seed(123)
+
+MC2_edges_weight_2028_indegree <- MC2_edges %>%
+  filter(year == 2028) %>%
+  filter(hscode == "306170" | hscode == "304620" | hscode == "160414") %>%
+  group_by(source, target, hscode, year) %>%
+  summarise(weights = n(), .groups = "drop") %>%
+  filter(source != target) %>%
+  ungroup() %>%
+  group_by(source) %>%
+  mutate(noofunique_targets = n_distinct(target)) %>%
+  ungroup() %>%
+  filter(weights >= quantile(weights, 0.80)) #or filter for unique target
+
+id1_weight_2028_indegree <- MC2_edges_weight_2028_indegree %>%
+  select(source) %>%
+  rename(id = source)
+id2_weight_2028_indegree <- MC2_edges_weight_2028_indegree %>%
+  select(target) %>%
+  rename(id = target)
+
+MC2_nodes_extracted_weight_2028_indegree <- rbind(id1_weight_2028_indegree, id2_weight_2028_indegree) %>% 
+  distinct()
+
+MC2_nodes_extracted_weight_2028_indegree <- left_join(MC2_nodes_extracted_weight_2028_indegree, MC2_nodes_cleaned, by = "id")
+
+# Create the graph
+MC2_graph_weights_2028_indegree <- tbl_graph(nodes=MC2_nodes_extracted_weight_2028_indegree,
+                                             edges = MC2_edges_weight_2028_indegree, 
+                                             directed = TRUE)
+
+# Calculate degree centrality & define threshold to assign nodes to either Central Carrier or Fishing Vessel
+indegree_centrality_2028 <- degree(MC2_graph_weights_2028_indegree, mode = "in")
+indegree_threshold_2028 <- 2
+
+# Set size to degree centrality
+V(MC2_graph_weights_2028_indegree)$size <- indegree_centrality_2028
+
+# Assign categories based on centrality measures
+indegree_categories_2028 <- ifelse(indegree_centrality_2028 > indegree_threshold_2028, "Central Carrier", "Fishing Vessel")
+
+# Store category information in MC2_nodes_extracted_weight_2028
+MC2_nodes_extracted_weight_2028_indegree$category <- indegree_categories_2028
+
+# Get top nodes based on degree centrality
+top_nodes_2028 <- MC2_nodes_extracted_weight_2028_indegree %>%
+  top_n(50, indegree_centrality_2028)
+
+# Visualize the filtered graph using ggraph
+ggraph(MC2_graph_weights_2028_indegree, layout = "fr") +
+  geom_edge_link(arrow = arrow(length = unit(0.02, "npc"))) +
+  geom_node_point(aes(color = indegree_categories_2028, size = size)) +
+  scale_color_manual(values = c("Central Carrier" = "red", "Fishing Vessel" = "grey")) +
+  scale_size_continuous(range = c(1, 2)) +
+  theme(legend.position = "right",
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.ticks = element_blank(),
+        axis.text = element_blank(),
+        axis.title = element_blank(),
+        panel.background = element_rect(fill = "white"),
+        plot.title = element_text(hjust = 0.5)) +
+  labs(title = "2028 Graph based on In-Degree Centrality")
+```
+:::
+
+## 6.2 Out-Degree Centrality by Years
+Within this section, we will leverage on degree centrality and ggraph to plot a static network graph. Out degree centrality is defined in the below code via mode = "out". Note that the dataset is furthered focused into a smaller subset in the below section as we are filtering for weights which are >= quantile 0.8. 
+
+Within the code outlined in Code Chunk below, we have also defined a node to be a "Central Carrier" if it's above a threshold currently defined at 2. If otherwise, then the node will be defined as "Fishing Vessel". This value was arrived after a few trial and errors before deciding that this was an optimal value. This helps us to detect transshipments which are frequent perpetrators of IUU fishing occuring out at sea.
+
+::: panel-tabset
+### 2028
+
+```{r}
+#| echo: false
+set.seed(123)
+
+MC2_edges_weight_2028_outdegree <- MC2_edges %>%
+  filter(year == 2028) %>%
+  filter(hscode == "306170" | hscode == "304620" | hscode == "160414") %>%
+  group_by(source, target, hscode, year) %>%
+  summarise(weights = n(), .groups = "drop") %>%
+  filter(source != target) %>%
+  ungroup() %>%
+  group_by(source) %>%
+  mutate(noofunique_targets = n_distinct(target)) %>%
+  ungroup() %>%
+  filter(weights >= quantile(weights, 0.80)) #or filter for unique target
+
+id1_weight_2028_outdegree <- MC2_edges_weight_2028_outdegree %>%
+  select(source) %>%
+  rename(id = source)
+id2_weight_2028_outdegree <- MC2_edges_weight_2028_outdegree %>%
+  select(target) %>%
+  rename(id = target)
+
+MC2_nodes_extracted_weight_2028_outdegree <- rbind(id1_weight_2028_outdegree, id2_weight_2028_outdegree) %>% 
+  distinct()
+
+MC2_nodes_extracted_weight_2028_outdegree <- left_join(MC2_nodes_extracted_weight_2028_outdegree, MC2_nodes_cleaned, by = "id")
+
+# Create the graph
+MC2_graph_weights_2028_outdegree <- tbl_graph(nodes=MC2_nodes_extracted_weight_2028_outdegree,
+                                             edges = MC2_edges_weight_2028_outdegree, 
+                                             directed = TRUE)
+
+# Calculate degree centrality & define threshold to assign nodes to either Central Carrier or Fishing Vessel
+outdegree_centrality_2028 <- degree(MC2_graph_weights_2028_outdegree, mode = "out")
+outdegree_threshold_2028 <- 2
+
+# Set size to degree centrality
+V(MC2_graph_weights_2028_outdegree)$size <- outdegree_centrality_2028
+
+# Assign categories based on centrality measures
+outdegree_categories_2028 <- ifelse(outdegree_centrality_2028 > outdegree_threshold_2028, "Central Carrier", "Fishing Vessel")
+
+# Store category information in MC2_nodes_extracted_weight_2028
+MC2_nodes_extracted_weight_2028_outdegree$category <- outdegree_categories_2028
+
+# Visualize the filtered graph using ggraph
+ggraph(MC2_graph_weights_2028_outdegree, layout = "fr") +
+  geom_edge_link(arrow = arrow(length = unit(0.02, "npc"))) +
+  geom_node_point(aes(color = outdegree_categories_2028, size = size)) +
+  scale_color_manual(values = c("Central Carrier" = "red", "Fishing Vessel" = "grey")) +
+  scale_size_continuous(range = c(1, 2)) +
+  theme(legend.position = "right",
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.ticks = element_blank(),
+        axis.text = element_blank(),
+        axis.title = element_blank(),
+        panel.background = element_rect(fill = "white"),
+        plot.title = element_text(hjust = 0.5)) +
+  labs(title = "2028 Graph based on Out-Degree Centrality")
+```
+
+### 2029
+
+```{r}
+#| echo: false
+set.seed(123)
+
+MC2_edges_weight_2029_outdegree <- MC2_edges %>%
+  filter(year == 2029) %>%
+  filter(hscode == "306170" | hscode == "304620" | hscode == "160414") %>%
+  group_by(source, target, hscode, year) %>%
+  summarise(weights = n(), .groups = "drop") %>%
+  filter(source != target) %>%
+  ungroup() %>%
+  group_by(source) %>%
+  mutate(noofunique_targets = n_distinct(target)) %>%
+  ungroup() %>%
+  filter(weights >= quantile(weights, 0.80)) #or filter for unique target
+
+id1_weight_2029_outdegree <- MC2_edges_weight_2029_outdegree %>%
+  select(source) %>%
+  rename(id = source)
+id2_weight_2029_outdegree <- MC2_edges_weight_2029_outdegree %>%
+  select(target) %>%
+  rename(id = target)
+
+MC2_nodes_extracted_weight_2029_outdegree <- rbind(id1_weight_2029_outdegree, id2_weight_2029_outdegree) %>% 
+  distinct()
+
+MC2_nodes_extracted_weight_2029_outdegree <- left_join(MC2_nodes_extracted_weight_2029_outdegree, MC2_nodes_cleaned, by = "id")
+
+# Create the graph
+MC2_graph_weights_2029_outdegree <- tbl_graph(nodes=MC2_nodes_extracted_weight_2029_outdegree,
+                                             edges = MC2_edges_weight_2029_outdegree, 
+                                             directed = TRUE)
+
+# Calculate degree centrality & define threshold to assign nodes to either Central Carrier or Fishing Vessel
+outdegree_centrality_2029 <- degree(MC2_graph_weights_2029_outdegree, mode = "out")
+outdegree_threshold_2029 <- 2
+
+# Set size to degree centrality
+V(MC2_graph_weights_2029_outdegree)$size <- outdegree_centrality_2029
+
+# Assign categories based on centrality measures
+outdegree_categories_2029 <- ifelse(outdegree_centrality_2029 > outdegree_threshold_2029, "Central Carrier", "Fishing Vessel")
+
+# Store category information in MC2_nodes_extracted_weight_2029
+MC2_nodes_extracted_weight_2029_outdegree$category <- outdegree_categories_2029
+
+# Visualize the filtered graph using ggraph
+ggraph(MC2_graph_weights_2029_outdegree, layout = "fr") +
+  geom_edge_link(arrow = arrow(length = unit(0.02, "npc"))) +
+  geom_node_point(aes(color = outdegree_categories_2029, size = size)) +
+  scale_color_manual(values = c("Central Carrier" = "red", "Fishing Vessel" = "grey")) +
+  scale_size_continuous(range = c(1, 2)) +
+  theme(legend.position = "right",
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.ticks = element_blank(),
+        axis.text = element_blank(),
+        axis.title = element_blank(),
+        panel.background = element_rect(fill = "white"),
+        plot.title = element_text(hjust = 0.5)) +
+  labs(title = "2029 Graph based on Out-Degree Centrality")
+```
+
+### 2030
+
+```{r}
+#| echo: false
+set.seed(123)
+
+MC2_edges_weight_2030_outdegree <- MC2_edges %>%
+  filter(year == 2030) %>%
+  filter(hscode == "306170" | hscode == "304620" | hscode == "160414") %>%
+  group_by(source, target, hscode, year) %>%
+  summarise(weights = n(), .groups = "drop") %>%
+  filter(source != target) %>%
+  ungroup() %>%
+  group_by(source) %>%
+  mutate(noofunique_targets = n_distinct(target)) %>%
+  ungroup() %>%
+  filter(weights >= quantile(weights, 0.80)) #or filter for unique target
+
+id1_weight_2030_outdegree <- MC2_edges_weight_2030_outdegree %>%
+  select(source) %>%
+  rename(id = source)
+id2_weight_2030_outdegree <- MC2_edges_weight_2030_outdegree %>%
+  select(target) %>%
+  rename(id = target)
+
+MC2_nodes_extracted_weight_2030_outdegree <- rbind(id1_weight_2030_outdegree, id2_weight_2030_outdegree) %>% 
+  distinct()
+
+MC2_nodes_extracted_weight_2030_outdegree <- left_join(MC2_nodes_extracted_weight_2030_outdegree, MC2_nodes_cleaned, by = "id")
+
+# Create the graph
+MC2_graph_weights_2030_outdegree <- tbl_graph(nodes=MC2_nodes_extracted_weight_2030_outdegree,
+                                             edges = MC2_edges_weight_2030_outdegree, 
+                                             directed = TRUE)
+
+# Calculate degree centrality & define threshold to assign nodes to either Central Carrier or Fishing Vessel
+outdegree_centrality_2030 <- degree(MC2_graph_weights_2030_outdegree, mode = "out")
+outdegree_threshold_2030 <- 2
+
+# Set size to degree centrality
+V(MC2_graph_weights_2030_outdegree)$size <- outdegree_centrality_2030
+
+# Assign categories based on centrality measures
+outdegree_categories_2030 <- ifelse(outdegree_centrality_2030 > outdegree_threshold_2030, "Central Carrier", "Fishing Vessel")
+
+# Store category information in MC2_nodes_extracted_weight_2030
+MC2_nodes_extracted_weight_2030_outdegree$category <- outdegree_categories_2030
+
+# Visualize the filtered graph using ggraph
+ggraph(MC2_graph_weights_2030_outdegree, layout = "fr") +
+  geom_edge_link(arrow = arrow(length = unit(0.02, "npc"))) +
+  geom_node_point(aes(color = outdegree_categories_2030, size = size)) +
+  scale_color_manual(values = c("Central Carrier" = "red", "Fishing Vessel" = "grey")) +
+  scale_size_continuous(range = c(1, 2)) +
+  theme(legend.position = "right",
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.ticks = element_blank(),
+        axis.text = element_blank(),
+        axis.title = element_blank(),
+        panel.background = element_rect(fill = "white"),
+        plot.title = element_text(hjust = 0.5)) +
+  labs(title = "2030 Graph based on Out-Degree Centrality")
+```
+
+### 2031
+
+```{r}
+#| echo: false
+set.seed(123)
+
+MC2_edges_weight_2031_outdegree <- MC2_edges %>%
+  filter(year == 2031) %>%
+  filter(hscode == "306170" | hscode == "304620" | hscode == "160414") %>%
+  group_by(source, target, hscode, year) %>%
+  summarise(weights = n(), .groups = "drop") %>%
+  filter(source != target) %>%
+  ungroup() %>%
+  group_by(source) %>%
+  mutate(noofunique_targets = n_distinct(target)) %>%
+  ungroup() %>%
+  filter(weights >= quantile(weights, 0.80)) #or filter for unique target
+
+id1_weight_2031_outdegree <- MC2_edges_weight_2031_outdegree %>%
+  select(source) %>%
+  rename(id = source)
+id2_weight_2031_outdegree <- MC2_edges_weight_2031_outdegree %>%
+  select(target) %>%
+  rename(id = target)
+
+MC2_nodes_extracted_weight_2031_outdegree <- rbind(id1_weight_2031_outdegree, id2_weight_2031_outdegree) %>% 
+  distinct()
+
+MC2_nodes_extracted_weight_2031_outdegree <- left_join(MC2_nodes_extracted_weight_2031_outdegree, MC2_nodes_cleaned, by = "id")
+
+# Create the graph
+MC2_graph_weights_2031_outdegree <- tbl_graph(nodes=MC2_nodes_extracted_weight_2031_outdegree,
+                                             edges = MC2_edges_weight_2031_outdegree, 
+                                             directed = TRUE)
+
+# Calculate degree centrality & define threshold to assign nodes to either Central Carrier or Fishing Vessel
+outdegree_centrality_2031 <- degree(MC2_graph_weights_2031_outdegree, mode = "out")
+outdegree_threshold_2031 <- 2
+
+# Set size to degree centrality
+V(MC2_graph_weights_2031_outdegree)$size <- outdegree_centrality_2031
+
+# Assign categories based on centrality measures
+outdegree_categories_2031 <- ifelse(outdegree_centrality_2031 > outdegree_threshold_2031, "Central Carrier", "Fishing Vessel")
+
+# Store category information in MC2_nodes_extracted_weight_2031
+MC2_nodes_extracted_weight_2031_outdegree$category <- outdegree_categories_2031
+
+# Visualize the filtered graph using ggraph
+ggraph(MC2_graph_weights_2031_outdegree, layout = "fr") +
+  geom_edge_link(arrow = arrow(length = unit(0.02, "npc"))) +
+  geom_node_point(aes(color = outdegree_categories_2031, size = size)) +
+  scale_color_manual(values = c("Central Carrier" = "red", "Fishing Vessel" = "grey")) +
+  scale_size_continuous(range = c(1, 2)) +
+  theme(legend.position = "right",
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.ticks = element_blank(),
+        axis.text = element_blank(),
+        axis.title = element_blank(),
+        panel.background = element_rect(fill = "white"),
+        plot.title = element_text(hjust = 0.5)) +
+  labs(title = "2031 Graph based on Out-Degree Centrality")
+```
+
+### 2032
+
+```{r}
+#| echo: false
+set.seed(123)
+
+MC2_edges_weight_2032_outdegree <- MC2_edges %>%
+  filter(year == 2032) %>%
+  filter(hscode == "306170" | hscode == "304620" | hscode == "160414") %>%
+  group_by(source, target, hscode, year) %>%
+  summarise(weights = n(), .groups = "drop") %>%
+  filter(source != target) %>%
+  ungroup() %>%
+  group_by(source) %>%
+  mutate(noofunique_targets = n_distinct(target)) %>%
+  ungroup() %>%
+  filter(weights >= quantile(weights, 0.80)) #or filter for unique target
+
+id1_weight_2032_outdegree <- MC2_edges_weight_2032_outdegree %>%
+  select(source) %>%
+  rename(id = source)
+id2_weight_2032_outdegree <- MC2_edges_weight_2032_outdegree %>%
+  select(target) %>%
+  rename(id = target)
+
+MC2_nodes_extracted_weight_2032_outdegree <- rbind(id1_weight_2032_outdegree, id2_weight_2032_outdegree) %>% 
+  distinct()
+
+MC2_nodes_extracted_weight_2032_outdegree <- left_join(MC2_nodes_extracted_weight_2032_outdegree, MC2_nodes_cleaned, by = "id")
+
+# Create the graph
+MC2_graph_weights_2032_outdegree <- tbl_graph(nodes=MC2_nodes_extracted_weight_2032_outdegree,
+                                             edges = MC2_edges_weight_2032_outdegree, 
+                                             directed = TRUE)
+
+# Calculate degree centrality & define threshold to assign nodes to either Central Carrier or Fishing Vessel
+outdegree_centrality_2032 <- degree(MC2_graph_weights_2032_outdegree, mode = "out")
+outdegree_threshold_2032 <- 2
+
+# Set size to degree centrality
+V(MC2_graph_weights_2032_outdegree)$size <- outdegree_centrality_2032
+
+# Assign categories based on centrality measures
+outdegree_categories_2032 <- ifelse(outdegree_centrality_2032 > outdegree_threshold_2032, "Central Carrier", "Fishing Vessel")
+
+# Store category information in MC2_nodes_extracted_weight_2032
+MC2_nodes_extracted_weight_2032_outdegree$category <- outdegree_categories_2032
+
+# Visualize the filtered graph using ggraph
+ggraph(MC2_graph_weights_2032_outdegree, layout = "fr") +
+  geom_edge_link(arrow = arrow(length = unit(0.02, "npc"))) +
+  geom_node_point(aes(color = outdegree_categories_2032, size = size)) +
+  scale_color_manual(values = c("Central Carrier" = "red", "Fishing Vessel" = "grey")) +
+  scale_size_continuous(range = c(1, 2)) +
+  theme(legend.position = "right",
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.ticks = element_blank(),
+        axis.text = element_blank(),
+        axis.title = element_blank(),
+        panel.background = element_rect(fill = "white"),
+        plot.title = element_text(hjust = 0.5)) +
+  labs(title = "2032 Graph based on Out-Degree Centrality")
+```
+
+### 2033
+
+```{r}
+#| echo: false
+set.seed(123)
+
+MC2_edges_weight_2033_outdegree <- MC2_edges %>%
+  filter(year == 2033) %>%
+  filter(hscode == "306170" | hscode == "304620" | hscode == "160414") %>%
+  group_by(source, target, hscode, year) %>%
+  summarise(weights = n(), .groups = "drop") %>%
+  filter(source != target) %>%
+  ungroup() %>%
+  group_by(source) %>%
+  mutate(noofunique_targets = n_distinct(target)) %>%
+  ungroup() %>%
+  filter(weights >= quantile(weights, 0.80)) #or filter for unique target
+
+id1_weight_2033_outdegree <- MC2_edges_weight_2033_outdegree %>%
+  select(source) %>%
+  rename(id = source)
+id2_weight_2033_outdegree <- MC2_edges_weight_2033_outdegree %>%
+  select(target) %>%
+  rename(id = target)
+
+MC2_nodes_extracted_weight_2033_outdegree <- rbind(id1_weight_2033_outdegree, id2_weight_2033_outdegree) %>% 
+  distinct()
+
+MC2_nodes_extracted_weight_2033_outdegree <- left_join(MC2_nodes_extracted_weight_2033_outdegree, MC2_nodes_cleaned, by = "id")
+
+# Create the graph
+MC2_graph_weights_2033_outdegree <- tbl_graph(nodes=MC2_nodes_extracted_weight_2033_outdegree,
+                                             edges = MC2_edges_weight_2033_outdegree, 
+                                             directed = TRUE)
+
+# Calculate degree centrality & define threshold to assign nodes to either Central Carrier or Fishing Vessel
+outdegree_centrality_2033 <- degree(MC2_graph_weights_2033_outdegree, mode = "out")
+outdegree_threshold_2033 <- 2
+
+# Set size to degree centrality
+V(MC2_graph_weights_2033_outdegree)$size <- outdegree_centrality_2033
+
+# Assign categories based on centrality measures
+outdegree_categories_2033 <- ifelse(outdegree_centrality_2033 > outdegree_threshold_2033, "Central Carrier", "Fishing Vessel")
+
+# Store category information in MC2_nodes_extracted_weight_2033
+MC2_nodes_extracted_weight_2033_outdegree$category <- outdegree_categories_2033
+
+# Visualize the filtered graph using ggraph
+ggraph(MC2_graph_weights_2033_outdegree, layout = "fr") +
+  geom_edge_link(arrow = arrow(length = unit(0.02, "npc"))) +
+  geom_node_point(aes(color = outdegree_categories_2033, size = size)) +
+  scale_color_manual(values = c("Central Carrier" = "red", "Fishing Vessel" = "grey")) +
+  scale_size_continuous(range = c(1, 2)) +
+  theme(legend.position = "right",
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.ticks = element_blank(),
+        axis.text = element_blank(),
+        axis.title = element_blank(),
+        panel.background = element_rect(fill = "white"),
+        plot.title = element_text(hjust = 0.5)) +
+  labs(title = "2033 Graph based on Out-Degree Centrality")
+```
+
+### 2034
+
+```{r}
+#| echo: false
+set.seed(123)
+
+MC2_edges_weight_2034_outdegree <- MC2_edges %>%
+  filter(year == 2034) %>%
+  filter(hscode == "306170" | hscode == "304620" | hscode == "160414") %>%
+  group_by(source, target, hscode, year) %>%
+  summarise(weights = n(), .groups = "drop") %>%
+  filter(source != target) %>%
+  ungroup() %>%
+  group_by(source) %>%
+  mutate(noofunique_targets = n_distinct(target)) %>%
+  ungroup() %>%
+  filter(weights >= quantile(weights, 0.80)) #or filter for unique target
+
+id1_weight_2034_outdegree <- MC2_edges_weight_2034_outdegree %>%
+  select(source) %>%
+  rename(id = source)
+id2_weight_2034_outdegree <- MC2_edges_weight_2034_outdegree %>%
+  select(target) %>%
+  rename(id = target)
+
+MC2_nodes_extracted_weight_2034_outdegree <- rbind(id1_weight_2034_outdegree, id2_weight_2034_outdegree) %>% 
+  distinct()
+
+MC2_nodes_extracted_weight_2034_outdegree <- left_join(MC2_nodes_extracted_weight_2034_outdegree, MC2_nodes_cleaned, by = "id")
+
+# Create the graph
+MC2_graph_weights_2034_outdegree <- tbl_graph(nodes=MC2_nodes_extracted_weight_2034_outdegree,
+                                             edges = MC2_edges_weight_2034_outdegree, 
+                                             directed = TRUE)
+
+# Calculate degree centrality & define threshold to assign nodes to either Central Carrier or Fishing Vessel
+outdegree_centrality_2034 <- degree(MC2_graph_weights_2034_outdegree, mode = "out")
+outdegree_threshold_2034 <- 2
+
+# Set size to degree centrality
+V(MC2_graph_weights_2034_outdegree)$size <- outdegree_centrality_2034
+
+# Assign categories based on centrality measures
+outdegree_categories_2034 <- ifelse(outdegree_centrality_2034 > outdegree_threshold_2034, "Central Carrier", "Fishing Vessel")
+
+# Store category information in MC2_nodes_extracted_weight_2034
+MC2_nodes_extracted_weight_2034_outdegree$category <- outdegree_categories_2034
+
+# Visualize the filtered graph using ggraph
+ggraph(MC2_graph_weights_2034_outdegree, layout = "fr") +
+  geom_edge_link(arrow = arrow(length = unit(0.02, "npc"))) +
+  geom_node_point(aes(color = outdegree_categories_2034, size = size)) +
+  scale_color_manual(values = c("Central Carrier" = "red", "Fishing Vessel" = "grey")) +
+  scale_size_continuous(range = c(1, 2)) +
+  theme(legend.position = "right",
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.ticks = element_blank(),
+        axis.text = element_blank(),
+        axis.title = element_blank(),
+        panel.background = element_rect(fill = "white"),
+        plot.title = element_text(hjust = 0.5)) +
+  labs(title = "2034 Graph based on Out-Degree Centrality")
+```
+
+### Code Chunk
+
+The below shows a sample code chunk of how we can plot for the year 2028. Users need to take note to configure it to the respective years they are looking to analyse.
+
+```{r}
+#| eval: false
+set.seed(123)
+
+MC2_edges_weight_2028_outdegree <- MC2_edges %>%
+  filter(year == 2028) %>%
+  filter(hscode == "306170" | hscode == "304620" | hscode == "160414") %>%
+  group_by(source, target, hscode, year) %>%
+  summarise(weights = n(), .groups = "drop") %>%
+  filter(source != target) %>%
+  ungroup() %>%
+  group_by(source) %>%
+  mutate(noofunique_targets = n_distinct(target)) %>%
+  ungroup() %>%
+  filter(weights >= quantile(weights, 0.80)) #or filter for unique target
+
+id1_weight_2028_outdegree <- MC2_edges_weight_2028_outdegree %>%
+  select(source) %>%
+  rename(id = source)
+id2_weight_2028_outdegree <- MC2_edges_weight_2028_outdegree %>%
+  select(target) %>%
+  rename(id = target)
+
+MC2_nodes_extracted_weight_2028_outdegree <- rbind(id1_weight_2028_outdegree, id2_weight_2028_outdegree) %>% 
+  distinct()
+
+MC2_nodes_extracted_weight_2028_outdegree <- left_join(MC2_nodes_extracted_weight_2028_outdegree, MC2_nodes_cleaned, by = "id")
+
+# Create the graph
+MC2_graph_weights_2028_outdegree <- tbl_graph(nodes=MC2_nodes_extracted_weight_2028_outdegree,
+                                             edges = MC2_edges_weight_2028_outdegree, 
+                                             directed = TRUE)
+
+# Calculate degree centrality & define threshold to assign nodes to either Central Carrier or Fishing Vessel
+outdegree_centrality_2028 <- degree(MC2_graph_weights_2028_outdegree, mode = "out")
+outdegree_threshold_2028 <- 2
+
+# Set size to degree centrality
+V(MC2_graph_weights_2028_outdegree)$size <- outdegree_centrality_2028
+
+# Assign categories based on centrality measures
+outdegree_categories_2028 <- ifelse(outdegree_centrality_2028 > outdegree_threshold_2028, "Central Carrier", "Fishing Vessel")
+
+# Store category information in MC2_nodes_extracted_weight_2028
+MC2_nodes_extracted_weight_2028_outdegree$category <- outdegree_categories_2028
+
+# Visualize the filtered graph using ggraph
+ggraph(MC2_graph_weights_2028_outdegree, layout = "fr") +
+  geom_edge_link(arrow = arrow(length = unit(0.02, "npc"))) +
+  geom_node_point(aes(color = outdegree_categories_2028, size = size)) +
+  scale_color_manual(values = c("Central Carrier" = "red", "Fishing Vessel" = "grey")) +
+  scale_size_continuous(range = c(1, 2)) +
+  theme(legend.position = "right",
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.ticks = element_blank(),
+        axis.text = element_blank(),
+        axis.title = element_blank(),
+        panel.background = element_rect(fill = "white"),
+        plot.title = element_text(hjust = 0.5)) +
+  labs(title = "2028 Graph based on Out-Degree Centrality")
+```
+:::
+
+## 6.3 Eigenvector Centrality by Years
+Within this section, we will leverage on eigenvector centrality and ggraph to plot a static network graph. Eigenvector Centrality helps to detect notes that are has a more transitive influence. A node who has a higher eigenvector score implies that it is connected to many nodes who also have high scores. Note that the dataset is furthered focused into a smaller subset in the below section as we are filtering for weights which are >= quantile 0.8. 
+
+Within the code outlined in Code Chunk below, we have also defined a node to be a "Central Carrier" if it's above a threshold currently defined at 0.3. If otherwise, then the node will be defined as "Fishing Vessel". This value was arrived after a few trial and errors before deciding that this was an optimal value. This helps us to detect transshipments which are frequent perpetrators of IUU fishing occuring out at sea.
+
+::: panel-tabset
+### 2028
+
+```{r}
+#| echo: false
+set.seed(123)
+
+MC2_edges_weight_2028_eigenvector <- MC2_edges %>%
+  filter(year == 2028) %>%
+  filter(hscode == "306170" | hscode == "304620" | hscode == "160414") %>%
+  group_by(source, target, hscode, year) %>%
+  summarise(weights = n(), .groups = "drop") %>%
+  filter(source != target) %>%
+  ungroup() %>%
+  group_by(source) %>%
+  mutate(noofunique_targets = n_distinct(target)) %>%
+  ungroup() %>%
+  filter(weights >= quantile(weights, 0.8)) #or filter for unique target
+
+id1_weight_2028_eigenvector <- MC2_edges_weight_2028_eigenvector %>%
+  select(source) %>%
+  rename(id = source)
+id2_weight_2028_eigenvector <- MC2_edges_weight_2028_eigenvector %>%
+  select(target) %>%
+  rename(id = target)
+
+MC2_nodes_extracted_weight_2028_eigenvector <- rbind(id1_weight_2028_eigenvector, id2_weight_2028_eigenvector) %>%
+  distinct()
+
+MC2_nodes_extracted_weight_2028_eigenvector <- left_join(MC2_nodes_extracted_weight_2028_eigenvector, MC2_nodes_cleaned, by = "id")
+
+# Create the graph with filtered edges
+MC2_graph_weights_2028_eigenvector <- tbl_graph(nodes = MC2_nodes_extracted_weight_2028_eigenvector, 
+                                    edges = MC2_edges_weight_2028_eigenvector, 
+                                    directed = TRUE)
+
+# Calculate eigenvector centrality & define threshold to assign nodes to either Central Carrier or Fishing Vessel
+eigenvector_centrality_2028 <- eigen_centrality(MC2_graph_weights_2028_eigenvector)$vector
+eigenvector_threshold_2028 <- 0.3
+
+# Set size to eigenvector centrality
+V(MC2_graph_weights_2028_eigenvector)$size <- eigenvector_centrality_2028
+
+# Assign categories based on eigenvector centrality measures
+eigen_categories_2028 <- ifelse(eigenvector_centrality_2028 > eigenvector_threshold_2028, "Central Carrier", "Fishing Vessel")
+
+# Store category information in MC2_nodes_extracted_weight_2034
+MC2_nodes_extracted_weight_2028_eigenvector$category <- eigen_categories_2028
+
+# Get top nodes based on eigenvector centrality
+top_nodes_2028_eigenvector <- MC2_nodes_extracted_weight_2028_eigenvector %>%
+  top_n(50, eigenvector_centrality_2028)
+
+# Visualize the filtered graph using ggraph
+ggraph(MC2_graph_weights_2028_eigenvector, layout = "fr") +
+  geom_edge_link(arrow = arrow(length = unit(0.02, "npc"))) +
+  geom_node_point(aes(color = eigen_categories_2028, size = size)) +
+  scale_color_manual(values = c("Central Carrier" = "red", "Fishing Vessel" = "grey")) +
+  scale_size_continuous(range = c(1, 2)) +
+  theme(legend.position = "right",
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.ticks = element_blank(),
+        axis.text = element_blank(),
+        axis.title = element_blank(),
+        panel.background = element_rect(fill = "white"),
+        plot.title = element_text(hjust = 0.5)) +
+  labs(title = "2028 Graph based on Eigenvector Centrality")
+```
+
+### 2029
+
+```{r}
+#| echo: false
+set.seed(123)
+
+MC2_edges_weight_2029_eigenvector <- MC2_edges %>%
+  filter(year == 2029) %>%
+  filter(hscode == "306170" | hscode == "304620" | hscode == "160414") %>%
+  group_by(source, target, hscode, year) %>%
+  summarise(weights = n(), .groups = "drop") %>%
+  filter(source != target) %>%
+  ungroup() %>%
+  group_by(source) %>%
+  mutate(noofunique_targets = n_distinct(target)) %>%
+  ungroup() %>%
+  filter(weights >= quantile(weights, 0.8)) #or filter for unique target
+
+id1_weight_2029_eigenvector <- MC2_edges_weight_2029_eigenvector %>%
+  select(source) %>%
+  rename(id = source)
+id2_weight_2029_eigenvector <- MC2_edges_weight_2029_eigenvector %>%
+  select(target) %>%
+  rename(id = target)
+
+MC2_nodes_extracted_weight_2029_eigenvector <- rbind(id1_weight_2029_eigenvector, id2_weight_2029_eigenvector) %>%
+  distinct()
+
+MC2_nodes_extracted_weight_2029_eigenvector <- left_join(MC2_nodes_extracted_weight_2029_eigenvector, MC2_nodes_cleaned, by = "id")
+
+# Create the graph with filtered edges
+MC2_graph_weights_2029_eigenvector <- tbl_graph(nodes = MC2_nodes_extracted_weight_2029_eigenvector, 
+                                    edges = MC2_edges_weight_2029_eigenvector, 
+                                    directed = TRUE)
+
+# Calculate eigenvector centrality & define threshold to assign nodes to either Central Carrier or Fishing Vessel
+eigenvector_centrality_2029 <- eigen_centrality(MC2_graph_weights_2029_eigenvector)$vector
+eigenvector_threshold_2029 <- 0.3
+
+# Set size to eigenvector centrality
+V(MC2_graph_weights_2029_eigenvector)$size <- eigenvector_centrality_2029
+
+# Assign categories based on eigenvector centrality measures
+eigen_categories_2029 <- ifelse(eigenvector_centrality_2029 > eigenvector_threshold_2029, "Central Carrier", "Fishing Vessel")
+
+# Store category information in MC2_nodes_extracted_weight_2034
+MC2_nodes_extracted_weight_2029_eigenvector$category <- eigen_categories_2029
+
+# Get top nodes based on eigenvector centrality
+top_nodes_2029_eigenvector <- MC2_nodes_extracted_weight_2029_eigenvector %>%
+  top_n(50, eigenvector_centrality_2029)
+
+# Visualize the filtered graph using ggraph
+ggraph(MC2_graph_weights_2029_eigenvector, layout = "fr") +
+  geom_edge_link(arrow = arrow(length = unit(0.02, "npc"))) +
+  geom_node_point(aes(color = eigen_categories_2029, size = size)) +
+  scale_color_manual(values = c("Central Carrier" = "red", "Fishing Vessel" = "grey")) +
+  scale_size_continuous(range = c(1, 2)) +
+  theme(legend.position = "right",
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.ticks = element_blank(),
+        axis.text = element_blank(),
+        axis.title = element_blank(),
+        panel.background = element_rect(fill = "white"),
+        plot.title = element_text(hjust = 0.5)) +
+  labs(title = "2029 Graph based on Eigenvector Centrality")
+```
+
+### 2030
+
+```{r}
+#| echo: false
+set.seed(123)
+
+MC2_edges_weight_2030_eigenvector <- MC2_edges %>%
+  filter(year == 2030) %>%
+  filter(hscode == "306170" | hscode == "304620" | hscode == "160414") %>%
+  group_by(source, target, hscode, year) %>%
+  summarise(weights = n(), .groups = "drop") %>%
+  filter(source != target) %>%
+  ungroup() %>%
+  group_by(source) %>%
+  mutate(noofunique_targets = n_distinct(target)) %>%
+  ungroup() %>%
+  filter(weights >= quantile(weights, 0.8)) #or filter for unique target
+
+id1_weight_2030_eigenvector <- MC2_edges_weight_2030_eigenvector %>%
+  select(source) %>%
+  rename(id = source)
+id2_weight_2030_eigenvector <- MC2_edges_weight_2030_eigenvector %>%
+  select(target) %>%
+  rename(id = target)
+
+MC2_nodes_extracted_weight_2030_eigenvector <- rbind(id1_weight_2030_eigenvector, id2_weight_2030_eigenvector) %>%
+  distinct()
+
+MC2_nodes_extracted_weight_2030_eigenvector <- left_join(MC2_nodes_extracted_weight_2030_eigenvector, MC2_nodes_cleaned, by = "id")
+
+# Create the graph with filtered edges
+MC2_graph_weights_2030_eigenvector <- tbl_graph(nodes = MC2_nodes_extracted_weight_2030_eigenvector, 
+                                    edges = MC2_edges_weight_2030_eigenvector, 
+                                    directed = TRUE)
+
+# Calculate eigenvector centrality & define threshold to assign nodes to either Central Carrier or Fishing Vessel
+eigenvector_centrality_2030 <- eigen_centrality(MC2_graph_weights_2030_eigenvector)$vector
+eigenvector_threshold_2030 <- 0.3
+
+# Set size to eigenvector centrality
+V(MC2_graph_weights_2030_eigenvector)$size <- eigenvector_centrality_2030
+
+# Assign categories based on eigenvector centrality measures
+eigen_categories_2030 <- ifelse(eigenvector_centrality_2030 > eigenvector_threshold_2030, "Central Carrier", "Fishing Vessel")
+
+# Store category information in MC2_nodes_extracted_weight_2034
+MC2_nodes_extracted_weight_2030_eigenvector$category <- eigen_categories_2030
+
+# Get top nodes based on eigenvector centrality
+top_nodes_2030_eigenvector <- MC2_nodes_extracted_weight_2030_eigenvector %>%
+  top_n(50, eigenvector_centrality_2030)
+
+# Visualize the filtered graph using ggraph
+ggraph(MC2_graph_weights_2030_eigenvector, layout = "fr") +
+  geom_edge_link(arrow = arrow(length = unit(0.02, "npc"))) +
+  geom_node_point(aes(color = eigen_categories_2030, size = size)) +
+  scale_color_manual(values = c("Central Carrier" = "red", "Fishing Vessel" = "grey")) +
+  scale_size_continuous(range = c(1, 2)) +
+  theme(legend.position = "right",
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.ticks = element_blank(),
+        axis.text = element_blank(),
+        axis.title = element_blank(),
+        panel.background = element_rect(fill = "white"),
+        plot.title = element_text(hjust = 0.5)) +
+  labs(title = "2030 Graph based on Eigenvector Centrality")
+```
+
+### 2031
+
+```{r}
+#| echo: false
+set.seed(123)
+
+MC2_edges_weight_2031_eigenvector <- MC2_edges %>%
+  filter(year == 2031) %>%
+  filter(hscode == "306170" | hscode == "304620" | hscode == "160414") %>%
+  group_by(source, target, hscode, year) %>%
+  summarise(weights = n(), .groups = "drop") %>%
+  filter(source != target) %>%
+  ungroup() %>%
+  group_by(source) %>%
+  mutate(noofunique_targets = n_distinct(target)) %>%
+  ungroup() %>%
+  filter(weights >= quantile(weights, 0.8)) #or filter for unique target
+
+id1_weight_2031_eigenvector <- MC2_edges_weight_2031_eigenvector %>%
+  select(source) %>%
+  rename(id = source)
+id2_weight_2031_eigenvector <- MC2_edges_weight_2031_eigenvector %>%
+  select(target) %>%
+  rename(id = target)
+
+MC2_nodes_extracted_weight_2031_eigenvector <- rbind(id1_weight_2031_eigenvector, id2_weight_2031_eigenvector) %>%
+  distinct()
+
+MC2_nodes_extracted_weight_2031_eigenvector <- left_join(MC2_nodes_extracted_weight_2031_eigenvector, MC2_nodes_cleaned, by = "id")
+
+# Create the graph with filtered edges
+MC2_graph_weights_2031_eigenvector <- tbl_graph(nodes = MC2_nodes_extracted_weight_2031_eigenvector, 
+                                    edges = MC2_edges_weight_2031_eigenvector, 
+                                    directed = TRUE)
+
+# Calculate eigenvector centrality & define threshold to assign nodes to either Central Carrier or Fishing Vessel
+eigenvector_centrality_2031 <- eigen_centrality(MC2_graph_weights_2031_eigenvector)$vector
+eigenvector_threshold_2031 <- 0.3
+
+# Set size to eigenvector centrality
+V(MC2_graph_weights_2031_eigenvector)$size <- eigenvector_centrality_2031
+
+# Assign categories based on eigenvector centrality measures
+eigen_categories_2031 <- ifelse(eigenvector_centrality_2031 > eigenvector_threshold_2031, "Central Carrier", "Fishing Vessel")
+
+# Store category information in MC2_nodes_extracted_weight_2034
+MC2_nodes_extracted_weight_2031_eigenvector$category <- eigen_categories_2031
+
+# Get top nodes based on eigenvector centrality
+top_nodes_2031_eigenvector <- MC2_nodes_extracted_weight_2031_eigenvector %>%
+  top_n(50, eigenvector_centrality_2031)
+
+# Visualize the filtered graph using ggraph
+ggraph(MC2_graph_weights_2031_eigenvector, layout = "fr") +
+  geom_edge_link(arrow = arrow(length = unit(0.02, "npc"))) +
+  geom_node_point(aes(color = eigen_categories_2031, size = size)) +
+  scale_color_manual(values = c("Central Carrier" = "red", "Fishing Vessel" = "grey")) +
+  scale_size_continuous(range = c(1, 2)) +
+  theme(legend.position = "right",
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.ticks = element_blank(),
+        axis.text = element_blank(),
+        axis.title = element_blank(),
+        panel.background = element_rect(fill = "white"),
+        plot.title = element_text(hjust = 0.5)) +
+  labs(title = "2031 Graph based on Eigenvector Centrality")
+```
+
+### 2032
+
+```{r}
+#| echo: false
+set.seed(123)
+
+MC2_edges_weight_2032_eigenvector <- MC2_edges %>%
+  filter(year == 2032) %>%
+  filter(hscode == "306170" | hscode == "304620" | hscode == "160414") %>%
+  group_by(source, target, hscode, year) %>%
+  summarise(weights = n(), .groups = "drop") %>%
+  filter(source != target) %>%
+  ungroup() %>%
+  group_by(source) %>%
+  mutate(noofunique_targets = n_distinct(target)) %>%
+  ungroup() %>%
+  filter(weights >= quantile(weights, 0.8)) #or filter for unique target
+
+id1_weight_2032_eigenvector <- MC2_edges_weight_2032_eigenvector %>%
+  select(source) %>%
+  rename(id = source)
+id2_weight_2032_eigenvector <- MC2_edges_weight_2032_eigenvector %>%
+  select(target) %>%
+  rename(id = target)
+
+MC2_nodes_extracted_weight_2032_eigenvector <- rbind(id1_weight_2032_eigenvector, id2_weight_2032_eigenvector) %>%
+  distinct()
+
+MC2_nodes_extracted_weight_2032_eigenvector <- left_join(MC2_nodes_extracted_weight_2032_eigenvector, MC2_nodes_cleaned, by = "id")
+
+# Create the graph with filtered edges
+MC2_graph_weights_2032_eigenvector <- tbl_graph(nodes = MC2_nodes_extracted_weight_2032_eigenvector, 
+                                    edges = MC2_edges_weight_2032_eigenvector, 
+                                    directed = TRUE)
+
+# Calculate eigenvector centrality & define threshold to assign nodes to either Central Carrier or Fishing Vessel
+eigenvector_centrality_2032 <- eigen_centrality(MC2_graph_weights_2032_eigenvector)$vector
+eigenvector_threshold_2032 <- 0.3
+
+# Set size to eigenvector centrality
+V(MC2_graph_weights_2032_eigenvector)$size <- eigenvector_centrality_2032
+
+# Assign categories based on eigenvector centrality measures
+eigen_categories_2032 <- ifelse(eigenvector_centrality_2032 > eigenvector_threshold_2032, "Central Carrier", "Fishing Vessel")
+
+# Store category information in MC2_nodes_extracted_weight_2034
+MC2_nodes_extracted_weight_2032_eigenvector$category <- eigen_categories_2032
+
+# Get top nodes based on eigenvector centrality
+top_nodes_2032_eigenvector <- MC2_nodes_extracted_weight_2032_eigenvector %>%
+  top_n(50, eigenvector_centrality_2032)
+
+# Visualize the filtered graph using ggraph
+ggraph(MC2_graph_weights_2032_eigenvector, layout = "fr") +
+  geom_edge_link(arrow = arrow(length = unit(0.02, "npc"))) +
+  geom_node_point(aes(color = eigen_categories_2032, size = size)) +
+  scale_color_manual(values = c("Central Carrier" = "red", "Fishing Vessel" = "grey")) +
+  scale_size_continuous(range = c(1, 2)) +
+  theme(legend.position = "right",
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.ticks = element_blank(),
+        axis.text = element_blank(),
+        axis.title = element_blank(),
+        panel.background = element_rect(fill = "white"),
+        plot.title = element_text(hjust = 0.5)) +
+  labs(title = "2032 Graph based on Eigenvector Centrality")
+```
+
+### 2033
+
+```{r}
+#| echo: false
+set.seed(123)
+
+MC2_edges_weight_2033_eigenvector <- MC2_edges %>%
+  filter(year == 2033) %>%
+  filter(hscode == "306170" | hscode == "304620" | hscode == "160414") %>%
+  group_by(source, target, hscode, year) %>%
+  summarise(weights = n(), .groups = "drop") %>%
+  filter(source != target) %>%
+  ungroup() %>%
+  group_by(source) %>%
+  mutate(noofunique_targets = n_distinct(target)) %>%
+  ungroup() %>%
+  filter(weights >= quantile(weights, 0.8)) #or filter for unique target
+
+id1_weight_2033_eigenvector <- MC2_edges_weight_2033_eigenvector %>%
+  select(source) %>%
+  rename(id = source)
+id2_weight_2033_eigenvector <- MC2_edges_weight_2033_eigenvector %>%
+  select(target) %>%
+  rename(id = target)
+
+MC2_nodes_extracted_weight_2033_eigenvector <- rbind(id1_weight_2033_eigenvector, id2_weight_2033_eigenvector) %>%
+  distinct()
+
+MC2_nodes_extracted_weight_2033_eigenvector <- left_join(MC2_nodes_extracted_weight_2033_eigenvector, MC2_nodes_cleaned, by = "id")
+
+# Create the graph with filtered edges
+MC2_graph_weights_2033_eigenvector <- tbl_graph(nodes = MC2_nodes_extracted_weight_2033_eigenvector, 
+                                    edges = MC2_edges_weight_2033_eigenvector, 
+                                    directed = TRUE)
+
+# Calculate eigenvector centrality & define threshold to assign nodes to either Central Carrier or Fishing Vessel
+eigenvector_centrality_2033 <- eigen_centrality(MC2_graph_weights_2033_eigenvector)$vector
+eigenvector_threshold_2033 <- 0.3
+
+# Set size to eigenvector centrality
+V(MC2_graph_weights_2033_eigenvector)$size <- eigenvector_centrality_2033
+
+# Assign categories based on eigenvector centrality measures
+eigen_categories_2033 <- ifelse(eigenvector_centrality_2033 > eigenvector_threshold_2033, "Central Carrier", "Fishing Vessel")
+
+# Store category information in MC2_nodes_extracted_weight_2034
+MC2_nodes_extracted_weight_2033_eigenvector$category <- eigen_categories_2033
+
+# Get top nodes based on eigenvector centrality
+top_nodes_2033_eigenvector <- MC2_nodes_extracted_weight_2033_eigenvector %>%
+  top_n(50, eigenvector_centrality_2033)
+
+# Visualize the filtered graph using ggraph
+ggraph(MC2_graph_weights_2033_eigenvector, layout = "fr") +
+  geom_edge_link(arrow = arrow(length = unit(0.02, "npc"))) +
+  geom_node_point(aes(color = eigen_categories_2033, size = size)) +
+  scale_color_manual(values = c("Central Carrier" = "red", "Fishing Vessel" = "grey")) +
+  scale_size_continuous(range = c(1, 2)) +
+  theme(legend.position = "right",
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.ticks = element_blank(),
+        axis.text = element_blank(),
+        axis.title = element_blank(),
+        panel.background = element_rect(fill = "white"),
+        plot.title = element_text(hjust = 0.5)) +
+  labs(title = "2033 Graph based on Eigenvector Centrality")
+```
+
+### 2034
+
+```{r}
+#| echo: false
+set.seed(123)
+
+MC2_edges_weight_2034_eigenvector <- MC2_edges %>%
+  filter(year == 2034) %>%
+  filter(hscode == "306170" | hscode == "304620" | hscode == "160414") %>%
+  group_by(source, target, hscode, year) %>%
+  summarise(weights = n(), .groups = "drop") %>%
+  filter(source != target) %>%
+  ungroup() %>%
+  group_by(source) %>%
+  mutate(noofunique_targets = n_distinct(target)) %>%
+  ungroup() %>%
+  filter(weights >= quantile(weights, 0.8)) #or filter for unique target
+
+id1_weight_2034_eigenvector <- MC2_edges_weight_2034_eigenvector %>%
+  select(source) %>%
+  rename(id = source)
+id2_weight_2034_eigenvector <- MC2_edges_weight_2034_eigenvector %>%
+  select(target) %>%
+  rename(id = target)
+
+MC2_nodes_extracted_weight_2034_eigenvector <- rbind(id1_weight_2034_eigenvector, id2_weight_2034_eigenvector) %>%
+  distinct()
+
+MC2_nodes_extracted_weight_2034_eigenvector <- left_join(MC2_nodes_extracted_weight_2034_eigenvector, MC2_nodes_cleaned, by = "id")
+
+# Create the graph with filtered edges
+MC2_graph_weights_2034_eigenvector <- tbl_graph(nodes = MC2_nodes_extracted_weight_2034_eigenvector, 
+                                    edges = MC2_edges_weight_2034_eigenvector, 
+                                    directed = TRUE)
+
+# Calculate eigenvector centrality & define threshold to assign nodes to either Central Carrier or Fishing Vessel
+eigenvector_centrality_2034 <- eigen_centrality(MC2_graph_weights_2034_eigenvector)$vector
+eigenvector_threshold_2034 <- 0.3
+
+# Set size to eigenvector centrality
+V(MC2_graph_weights_2034_eigenvector)$size <- eigenvector_centrality_2034
+
+# Assign categories based on eigenvector centrality measures
+eigen_categories_2034 <- ifelse(eigenvector_centrality_2034 > eigenvector_threshold_2034, "Central Carrier", "Fishing Vessel")
+
+# Store category information in MC2_nodes_extracted_weight_2034
+MC2_nodes_extracted_weight_2034_eigenvector$category <- eigen_categories_2034
+
+# Get top nodes based on eigenvector centrality
+top_nodes_2034_eigenvector <- MC2_nodes_extracted_weight_2034_eigenvector %>%
+  top_n(50, eigenvector_centrality_2034)
+
+# Visualize the filtered graph using ggraph
+ggraph(MC2_graph_weights_2034_eigenvector, layout = "fr") +
+  geom_edge_link(arrow = arrow(length = unit(0.02, "npc"))) +
+  geom_node_point(aes(color = eigen_categories_2034, size = size)) +
+  scale_color_manual(values = c("Central Carrier" = "red", "Fishing Vessel" = "grey")) +
+  scale_size_continuous(range = c(1, 2)) +
+  theme(legend.position = "right",
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.ticks = element_blank(),
+        axis.text = element_blank(),
+        axis.title = element_blank(),
+        panel.background = element_rect(fill = "white"),
+        plot.title = element_text(hjust = 0.5)) +
+  labs(title = "2034 Graph based on Eigenvector Centrality")
+```
+
+### Code Chunk
+
+The below shows a sample code chunk of how we can plot for the year 2028. Users need to take note to configure it to the respective years they are looking to analyse.
+
+```{r}
+#| eval: false
+set.seed(123)
+
+MC2_edges_weight_2028_eigenvector <- MC2_edges %>%
+  filter(year == 2028) %>%
+  filter(hscode == "306170" | hscode == "304620" | hscode == "160414") %>%
+  group_by(source, target, hscode, year) %>%
+  summarise(weights = n(), .groups = "drop") %>%
+  filter(source != target) %>%
+  ungroup() %>%
+  group_by(source) %>%
+  mutate(noofunique_targets = n_distinct(target)) %>%
+  ungroup() %>%
+  filter(weights >= quantile(weights, 0.8)) #or filter for unique target
+
+id1_weight_2028_eigenvector <- MC2_edges_weight_2028_eigenvector %>%
+  select(source) %>%
+  rename(id = source)
+id2_weight_2028_eigenvector <- MC2_edges_weight_2028_eigenvector %>%
+  select(target) %>%
+  rename(id = target)
+
+MC2_nodes_extracted_weight_2028_eigenvector <- rbind(id1_weight_2028_eigenvector, id2_weight_2028_eigenvector) %>%
+  distinct()
+
+MC2_nodes_extracted_weight_2028_eigenvector <- left_join(MC2_nodes_extracted_weight_2028_eigenvector, MC2_nodes_cleaned, by = "id")
+
+# Create the graph with filtered edges
+MC2_graph_weights_2028_eigenvector <- tbl_graph(nodes = MC2_nodes_extracted_weight_2028_eigenvector, 
+                                    edges = MC2_edges_weight_2028_eigenvector, 
+                                    directed = TRUE)
+
+# Calculate eigenvector centrality & define threshold to assign nodes to either Central Carrier or Fishing Vessel
+eigenvector_centrality_2028 <- eigen_centrality(MC2_graph_weights_2028_eigenvector)$vector
+eigenvector_threshold_2028 <- 0.3
+
+# Set size to eigenvector centrality
+V(MC2_graph_weights_2028_eigenvector)$size <- eigenvector_centrality_2028
+
+# Assign categories based on eigenvector centrality measures
+eigen_categories_2028 <- ifelse(eigenvector_centrality_2028 > eigenvector_threshold_2028, "Central Carrier", "Fishing Vessel")
+
+# Store category information in MC2_nodes_extracted_weight_2034
+MC2_nodes_extracted_weight_2028_eigenvector$category <- eigen_categories_2028
+
+# Get top nodes based on eigenvector centrality
+top_nodes_2028_eigenvector <- MC2_nodes_extracted_weight_2028_eigenvector %>%
+  top_n(50, eigenvector_centrality_2028)
+
+# Visualize the filtered graph using ggraph
+ggraph(MC2_graph_weights_2028_eigenvector, layout = "fr") +
+  geom_edge_link(arrow = arrow(length = unit(0.02, "npc"))) +
+  geom_node_point(aes(color = eigen_categories_2028, size = size)) +
+  scale_color_manual(values = c("Central Carrier" = "red", "Fishing Vessel" = "grey")) +
+  scale_size_continuous(range = c(1, 2)) +
+  theme(legend.position = "right",
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.ticks = element_blank(),
+        axis.text = element_blank(),
+        axis.title = element_blank(),
+        panel.background = element_rect(fill = "white"),
+        plot.title = element_text(hjust = 0.5)) +
+  labs(title = "2028 Graph based on Eigenvector Centrality")
+```
+:::
+
+## 7. Visualisation and Network Insights
+## Mini-Case 2 Challenge Writeup & 4 Images
+For the purpose of mini-case 2 challenge writeup question 4, it is as per below bullet points. The supporting images are found in section 7.1 - 7.4.
+
+- IUU fishing occurrences typically occurs in the high seas. Given that transshipments are a huge potential for IUU fishing trades to occur as fishing vessels can obscure the origins of their catches that might have been caught illegally. The focus of this visualisation targets the transshipments between central carriers and fishing vessels. The visualisation outlined Section 7 serves to put forth the basis to enable the identification of companies that fit patterns of illegal fishing. 
+
+- Leveraging on Section 7.2 Interactive Visual, “Turkish Mussels LLC and” company is one example of a company that fit a pattern of illegal fishing. It was active in 2028 with several in-degree associations with three main nodes: 1) Arena del Sol Pic, 2) Mar del Placer CJSC Transport and 3) Saltwater Sirens Limited Liability Company Marine conservation. However, “Turkish Mussels LLC and” company seems to have closed down thereafter. It appears that these three nodes are going to “Turkish Mussels LLC and” to obtain illegal catches. Arena del Sol Pic has a high outdegree centrality as it goes out to several nodes such as “Saltwater Supreme OAO Forwarding” and “Selous Game Reserve S.A. de C.V” during 2029 for example to get fish supplies. Notably, Arena del Sol Pic is still in the business even in 2034, reaching out to nodes such as “Mar del Este CJSC” which has a high indegree centrality. This seems to imply that Arena del Sol Pic is the end user of the fishing product it gets from its supplier (ie implying that it brings the fishes directly out to the market for sale).
+
+### 7.1 Cluster Analysis (Leading Eigen Visual)
+
+Let us take a closer look at the clusters using the leading eigen clustering method, both in a tabular and visual manner.
+
+```{r}
+#| code-fold: true
+#| code-summary: "Show code"
+set.seed(123)
+
+# Create the graph with filtered edges
+MC2_graph_undirected_eigen <- tbl_graph(nodes = MC2_nodes_extracted_weight, 
+                                        edges = MC2_edges_weight, 
+                                        directed = TRUE)
+
+# Convert the tbl_graph to an igraph object
+MC2_igraph_undirected_eigen <- as.igraph(MC2_graph_undirected_eigen)
+
+# Extract & weaves the edge weights from the MC2_edges_weight dataset
+edge_weights <- MC2_edges_weight$weights
+E(MC2_igraph_undirected_eigen)$weight <- edge_weights
+
+# Perform leading eigenvector community detection
+eigen_groups <- cluster_leading_eigen(MC2_igraph_undirected_eigen, 
+                                      weights = E(MC2_igraph_undirected_eigen)$weight)
+
+# Assign categories based on the groups
+eigen_cluster <- as.character(eigen_groups$membership)
+
+# Visualize the graph using ggraph
+ggraph(MC2_graph_undirected_eigen, layout = "fr") +
+  geom_edge_link(color = "grey", alpha = 0.7, arrow = arrow(length = unit(0.015, "npc"))) +
+  geom_node_point(aes(color = eigen_cluster)) +
+  scale_color_manual(values = rainbow(length(unique(eigen_groups$membership)))) +
+  theme(legend.position = "right",
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.ticks = element_blank(),
+        axis.text = element_blank(),
+        axis.title = element_blank(),
+        panel.background = element_rect(fill = "white"),
+        plot.title = element_text(hjust = 0.5)) +
+  labs(title = "Clustering based on Eigenvector Centrality")
+```
+
+It appears that the top 3 clusters (in descending order, Cluster 20, 1, 23) consists of 14.8%, 14.3% and 9.2% of the framed dataset. This seems to suggest a presence of three bigger communities/clusters. 
+
+```{r}
+#| code-fold: true
+#| code-summary: "Show code"
+# Calculate the percentage for each cluster
+cluster_counts <- table(eigen_cluster)
+percentage_clusters <- cluster_counts %>%
+  prop.table() * 100
+
+# Top 3 clusters with the highest percentages
+top_3_clusters <- percentage_clusters %>%
+  sort(decreasing = TRUE) %>%
+  head(3) %>%
+  enframe(name = "Cluster", value = "Percentage") %>%
+  mutate(Cluster = as.character(Cluster)) 
+
+top_3_clusters
+```
+
+### 7.2 Interactive Network Graph - In-Degree Centrality
+Here, we explore the In-Degree Centrality network graph in an interactive manner across the various years. The below code chunk shows a sample of how we can plot an interactive network graph leveraging on the computed in-degree centrality over the years. We first begin by converting the graph into a tibble the interactive network graph requires us to work with numerical identifiers before defining the dropdown option via VisOptions.
+
+::: panel-tabset
+### 2028
+
+```{r}
+#| echo: false
+MC2_graph_weights_2028_indegree <- tbl_graph(nodes = MC2_nodes_extracted_weight_2028_indegree, edges = MC2_edges_weight_2028_indegree, directed = TRUE)
+nodes_df_weights_2028_indegree <- MC2_graph_weights_2028_indegree %>%
+  activate(nodes) %>%
+  as.tibble() %>%
+  rename(label = id) %>%
+  mutate(id=row_number()) %>%
+  select(id, label, shpcountry, rcvcountry)
+  
+edges_df_weights_2028_indegree <- MC2_graph_weights_2028_indegree %>%
+  activate(edges) %>%
+  as.tibble()
+
+MC2_nodes_extracted_weight_2028_indegree <- MC2_nodes_extracted_weight_2028_indegree %>%
+  rename(label = id)
+
+nodes_df_weights_2028_indegree <- inner_join(nodes_df_weights_2028_indegree, MC2_nodes_extracted_weight_2028_indegree, by = "label") %>%
+  select(id, label, shpcountry.x, rcvcountry.x, category)
+
+nodes_df_weights_2028_indegree <- nodes_df_weights_2028_indegree %>%
+  mutate(color = ifelse(category == "Central Carrier", "red", "grey"))
+
+names_2028_indegree <- sort(nodes_df_weights_2028_indegree$id) # for the ID nodes dropdown box
+
+vis_plot_2028_indegree <- visNetwork(nodes = nodes_df_weights_2028_indegree, edges = edges_df_weights_2028_indegree) %>%
+  visIgraphLayout(layout = "layout_with_fr", 
+                  smooth = FALSE,
+                  physics = TRUE       
+                ) %>%
+  visNodes(size = 50) %>%
+  visEdges(color = list(highlight = "lightgray"), arrows = 'to', 
+           smooth = list(enabled = TRUE, type = "curvedCW")) %>%
+  visOptions(selectedBy = "category",
+             highlightNearest = list(enabled = TRUE,
+                                     degree = 1,
+                                     hover = TRUE,
+                                     labelOnly = TRUE),
+             nodesIdSelection = list(enabled = TRUE,
+                                     values = names_2028_indegree)) %>%
+  visLegend(width = 0.1) %>%
+  visPhysics(repulsion = list(springlength = 50), 
+             maxVelocity = 2,
+             solver = "forceAtlas2Based",
+             forceAtlas2Based = list(gravitationalConstant = -1000),
+             timestep = 0.25)
+
+vis_plot_2028_indegree
+```
+
+### 2029
+
+```{r}
+#| echo: false
+MC2_graph_weights_2029_indegree <- tbl_graph(nodes = MC2_nodes_extracted_weight_2029_indegree, edges = MC2_edges_weight_2029_indegree, directed = TRUE)
+nodes_df_weights_2029_indegree <- MC2_graph_weights_2029_indegree %>%
+  activate(nodes) %>%
+  as.tibble() %>%
+  rename(label = id) %>%
+  mutate(id=row_number()) %>%
+  select(id, label, shpcountry, rcvcountry)
+  
+edges_df_weights_2029_indegree <- MC2_graph_weights_2029_indegree %>%
+  activate(edges) %>%
+  as.tibble()
+
+MC2_nodes_extracted_weight_2029_indegree <- MC2_nodes_extracted_weight_2029_indegree %>%
+  rename(label = id)
+
+nodes_df_weights_2029_indegree <- inner_join(nodes_df_weights_2029_indegree, MC2_nodes_extracted_weight_2029_indegree, by = "label") %>%
+  select(id, label, shpcountry.x, rcvcountry.x, category)
+
+nodes_df_weights_2029_indegree <- nodes_df_weights_2029_indegree %>%
+  mutate(color = ifelse(category == "Central Carrier", "red", "grey"))
+
+names_2029_indegree <- sort(nodes_df_weights_2029_indegree$id) # for the ID nodes dropdown box
+
+vis_plot_2029_indegree <- visNetwork(nodes = nodes_df_weights_2029_indegree, edges = edges_df_weights_2029_indegree) %>%
+  visIgraphLayout(layout = "layout_with_fr",
+                  smooth = FALSE,
+                  physics = TRUE
+                ) %>%
+  visNodes(size = 50) %>%
+  visEdges(color = list(highlight = "lightgray"), arrows = 'to', 
+           smooth = list(enabled = TRUE, type = "curvedCW")) %>%
+  visOptions(selectedBy = "category",
+             highlightNearest = list(enabled = TRUE,
+                                     degree = 1,
+                                     hover = TRUE,
+                                     labelOnly = TRUE),
+             nodesIdSelection = list(enabled = TRUE,
+                                     values = names_2029_indegree)) %>%
+  visLegend(width = 0.1) %>%
+  visPhysics(repulsion = list(springlength = 50), 
+             maxVelocity = 2,
+             solver = "forceAtlas2Based",
+             forceAtlas2Based = list(gravitationalConstant = -1000),
+             timestep = 0.25)
+
+vis_plot_2029_indegree
+```
+
+### 2030
+
+```{r}
+#| echo: false
+MC2_graph_weights_2030_indegree <- tbl_graph(nodes = MC2_nodes_extracted_weight_2030_indegree, edges = MC2_edges_weight_2030_indegree, directed = TRUE)
+nodes_df_weights_2030_indegree <- MC2_graph_weights_2030_indegree %>%
+  activate(nodes) %>%
+  as.tibble() %>%
+  rename(label = id) %>%
+  mutate(id=row_number()) %>%
+  select(id, label, shpcountry, rcvcountry)
+  
+edges_df_weights_2030_indegree <- MC2_graph_weights_2030_indegree %>%
+  activate(edges) %>%
+  as.tibble()
+
+MC2_nodes_extracted_weight_2030_indegree <- MC2_nodes_extracted_weight_2030_indegree %>%
+  rename(label = id)
+
+nodes_df_weights_2030_indegree <- inner_join(nodes_df_weights_2030_indegree, MC2_nodes_extracted_weight_2030_indegree, by = "label") %>%
+  select(id, label, shpcountry.x, rcvcountry.x, category)
+
+nodes_df_weights_2030_indegree <- nodes_df_weights_2030_indegree %>%
+  mutate(color = ifelse(category == "Central Carrier", "red", "grey"))
+
+names_2030_indegree <- sort(nodes_df_weights_2030_indegree$id) # for the ID nodes dropdown box
+
+vis_plot_2030_indegree <- visNetwork(nodes = nodes_df_weights_2030_indegree, edges = edges_df_weights_2030_indegree) %>%
+  visIgraphLayout(layout = "layout_with_fr", 
+                  smooth = FALSE,
+                  physics = TRUE
+                ) %>%
+  visNodes(size = 50) %>%
+  visEdges(color = list(highlight = "lightgray"), arrows = 'to', 
+           smooth = list(enabled = TRUE, type = "curvedCW")) %>%
+  visOptions(selectedBy = "category",
+             highlightNearest = list(enabled = TRUE,
+                                     degree = 1,
+                                     hover = TRUE,
+                                     labelOnly = TRUE),
+             nodesIdSelection = list(enabled = TRUE,
+                                     values = names_2030_indegree)) %>%
+  visLegend(width = 0.1) %>%
+  visPhysics(repulsion = list(springlength = 50), 
+             maxVelocity = 2,
+             solver = "forceAtlas2Based",
+             forceAtlas2Based = list(gravitationalConstant = -1000),
+             timestep = 0.25)
+
+vis_plot_2030_indegree
+```
+
+### 2031
+
+```{r}
+#| echo: false
+MC2_graph_weights_2031_indegree <- tbl_graph(nodes = MC2_nodes_extracted_weight_2031_indegree, edges = MC2_edges_weight_2031_indegree, directed = TRUE)
+nodes_df_weights_2031_indegree <- MC2_graph_weights_2031_indegree %>%
+  activate(nodes) %>%
+  as.tibble() %>%
+  rename(label = id) %>%
+  mutate(id=row_number()) %>%
+  select(id, label, shpcountry, rcvcountry)
+  
+edges_df_weights_2031_indegree <- MC2_graph_weights_2031_indegree %>%
+  activate(edges) %>%
+  as.tibble()
+
+MC2_nodes_extracted_weight_2031_indegree <- MC2_nodes_extracted_weight_2031_indegree %>%
+  rename(label = id)
+
+nodes_df_weights_2031_indegree <- inner_join(nodes_df_weights_2031_indegree, MC2_nodes_extracted_weight_2031_indegree, by = "label") %>%
+  select(id, label, shpcountry.x, rcvcountry.x, category)
+
+nodes_df_weights_2031_indegree <- nodes_df_weights_2031_indegree %>%
+  mutate(color = ifelse(category == "Central Carrier", "red", "grey"))
+
+names_2031_indegree <- sort(nodes_df_weights_2031_indegree$id) # for the ID nodes dropdown box
+
+vis_plot_2031_indegree <- visNetwork(nodes = nodes_df_weights_2031_indegree, edges = edges_df_weights_2031_indegree) %>%
+  visIgraphLayout(layout = "layout_with_fr",
+                  smooth = FALSE,
+                  physics = TRUE
+                ) %>%
+  visNodes(size = 50) %>%
+  visEdges(color = list(highlight = "lightgray"), arrows = 'to', 
+           smooth = list(enabled = TRUE, type = "curvedCW")) %>%
+  visOptions(selectedBy = "category",
+             highlightNearest = list(enabled = TRUE,
+                                     degree = 1,
+                                     hover = TRUE,
+                                     labelOnly = TRUE),
+             nodesIdSelection = list(enabled = TRUE,
+                                     values = names_2031_indegree)) %>%
+  visLegend(width = 0.1) %>%
+  visPhysics(repulsion = list(springlength = 50),
+             maxVelocity = 2,
+             solver = "forceAtlas2Based",
+             forceAtlas2Based = list(gravitationalConstant = -1000),
+             timestep = 0.25)
+
+vis_plot_2031_indegree
+```
+
+### 2032
+
+```{r}
+#| echo: false
+MC2_graph_weights_2032_indegree <- tbl_graph(nodes = MC2_nodes_extracted_weight_2032_indegree, edges = MC2_edges_weight_2032_indegree, directed = TRUE)
+nodes_df_weights_2032_indegree <- MC2_graph_weights_2032_indegree %>%
+  activate(nodes) %>%
+  as.tibble() %>%
+  rename(label = id) %>%
+  mutate(id=row_number()) %>%
+  select(id, label, shpcountry, rcvcountry)
+  
+edges_df_weights_2032_indegree <- MC2_graph_weights_2032_indegree %>%
+  activate(edges) %>%
+  as.tibble()
+
+MC2_nodes_extracted_weight_2032_indegree <- MC2_nodes_extracted_weight_2032_indegree %>%
+  rename(label = id)
+
+nodes_df_weights_2032_indegree <- inner_join(nodes_df_weights_2032_indegree, MC2_nodes_extracted_weight_2032_indegree, by = "label") %>%
+  select(id, label, shpcountry.x, rcvcountry.x, category)
+
+nodes_df_weights_2032_indegree <- nodes_df_weights_2032_indegree %>%
+  mutate(color = ifelse(category == "Central Carrier", "red", "grey"))
+
+names_2032_indegree <- sort(nodes_df_weights_2032_indegree$id) # for the ID nodes dropdown box
+
+vis_plot_2032_indegree <- visNetwork(nodes = nodes_df_weights_2032_indegree, edges = edges_df_weights_2032_indegree) %>%
+  visIgraphLayout(layout = "layout_with_fr",
+                  smooth = FALSE,
+                  physics = TRUE
+                ) %>%
+  visNodes(size = 50) %>%
+  visEdges(color = list(highlight = "lightgray"), arrows = 'to', 
+           smooth = list(enabled = TRUE, type = "curvedCW")) %>%
+  visOptions(selectedBy = "category",
+             highlightNearest = list(enabled = TRUE,
+                                     degree = 1,
+                                     hover = TRUE,
+                                     labelOnly = TRUE),
+             nodesIdSelection = list(enabled = TRUE,
+                                     values = names_2032_indegree)) %>%
+  visLegend(width = 0.1) %>%
+  visPhysics(repulsion = list(springlength = 50),
+             maxVelocity = 2,
+             solver = "forceAtlas2Based",
+             forceAtlas2Based = list(gravitationalConstant = -1000),
+             timestep = 0.25)
+
+vis_plot_2032_indegree
+```
+
+### 2033
+
+```{r}
+#| echo: false
+MC2_graph_weights_2033_indegree <- tbl_graph(nodes = MC2_nodes_extracted_weight_2033_indegree, edges = MC2_edges_weight_2033_indegree, directed = TRUE)
+nodes_df_weights_2033_indegree <- MC2_graph_weights_2033_indegree %>%
+  activate(nodes) %>%
+  as.tibble() %>%
+  rename(label = id) %>%
+  mutate(id=row_number()) %>%
+  select(id, label, shpcountry, rcvcountry)
+  
+edges_df_weights_2033_indegree <- MC2_graph_weights_2033_indegree %>%
+  activate(edges) %>%
+  as.tibble()
+
+MC2_nodes_extracted_weight_2033_indegree <- MC2_nodes_extracted_weight_2033_indegree %>%
+  rename(label = id)
+
+nodes_df_weights_2033_indegree <- inner_join(nodes_df_weights_2033_indegree, MC2_nodes_extracted_weight_2033_indegree, by = "label") %>%
+  select(id, label, shpcountry.x, rcvcountry.x, category)
+
+nodes_df_weights_2033_indegree <- nodes_df_weights_2033_indegree %>%
+  mutate(color = ifelse(category == "Central Carrier", "red", "grey"))
+
+names_2033_indegree <- sort(nodes_df_weights_2033_indegree$id) # for the ID nodes dropdown box
+
+vis_plot_2033_indegree <- visNetwork(nodes = nodes_df_weights_2033_indegree, edges = edges_df_weights_2033_indegree) %>%
+  visIgraphLayout(layout = "layout_with_fr",
+                  smooth = FALSE,
+                  physics = TRUE
+                ) %>%
+  visNodes(size = 50) %>%
+  visEdges(color = list(highlight = "lightgray"), arrows = 'to', 
+           smooth = list(enabled = TRUE, type = "curvedCW")) %>%
+  visOptions(selectedBy = "category",
+             highlightNearest = list(enabled = TRUE,
+                                     degree = 1,
+                                     hover = TRUE,
+                                     labelOnly = TRUE),
+             nodesIdSelection = list(enabled = TRUE,
+                                     values = names_2033_indegree)) %>%
+  visLegend(width = 0.1) %>%
+  visPhysics(repulsion = list(springlength = 50),
+             maxVelocity = 2,
+             solver = "forceAtlas2Based",
+             forceAtlas2Based = list(gravitationalConstant = -1000),
+             timestep = 0.25)
+
+vis_plot_2033_indegree
+```
+
+### 2034
+
+```{r}
+#| echo: false
+MC2_graph_weights_2034_indegree <- tbl_graph(nodes = MC2_nodes_extracted_weight_2034_indegree, edges = MC2_edges_weight_2034_indegree, directed = TRUE)
+nodes_df_weights_2034_indegree <- MC2_graph_weights_2034_indegree %>%
+  activate(nodes) %>%
+  as.tibble() %>%
+  rename(label = id) %>%
+  mutate(id=row_number()) %>%
+  select(id, label, shpcountry, rcvcountry)
+  
+edges_df_weights_2034_indegree <- MC2_graph_weights_2034_indegree %>%
+  activate(edges) %>%
+  as.tibble()
+
+MC2_nodes_extracted_weight_2034_indegree <- MC2_nodes_extracted_weight_2034_indegree %>%
+  rename(label = id)
+
+nodes_df_weights_2034_indegree <- inner_join(nodes_df_weights_2034_indegree, MC2_nodes_extracted_weight_2034_indegree, by = "label") %>%
+  select(id, label, shpcountry.x, rcvcountry.x, category)
+
+nodes_df_weights_2034_indegree <- nodes_df_weights_2034_indegree %>%
+  mutate(color = ifelse(category == "Central Carrier", "red", "grey"))
+
+names_2034_indegree <- sort(nodes_df_weights_2034_indegree$id) # for the ID nodes dropdown box
+
+vis_plot_2034_indegree <- visNetwork(nodes = nodes_df_weights_2034_indegree, edges = edges_df_weights_2034_indegree) %>%
+  visIgraphLayout(layout = "layout_with_fr",
+                  smooth = FALSE,
+                  physics = TRUE
+                ) %>%
+  visNodes(size = 50) %>%
+  visEdges(color = list(highlight = "lightgray"), arrows = 'to', 
+           smooth = list(enabled = TRUE, type = "curvedCW")) %>%
+  visOptions(selectedBy = "category",
+             highlightNearest = list(enabled = TRUE,
+                                     degree = 1,
+                                     hover = TRUE,
+                                     labelOnly = TRUE),
+             nodesIdSelection = list(enabled = TRUE,
+                                     values = names_2034_indegree)) %>%
+  visLegend(width = 0.1) %>%
+  visPhysics(repulsion = list(springlength = 50),
+             maxVelocity = 2,
+             solver = "forceAtlas2Based",
+             forceAtlas2Based = list(gravitationalConstant = -1000),
+             timestep = 0.25)
+
+vis_plot_2034_indegree
+```
+
+### Code Chunk
+
+```{r}
+#| eval: false
+MC2_graph_weights_2028_indegree <- tbl_graph(nodes = MC2_nodes_extracted_weight_2028_indegree, edges = MC2_edges_weight_2028_indegree, directed = TRUE)
+nodes_df_weights_2028_indegree <- MC2_graph_weights_2028_indegree %>%
+  activate(nodes) %>%
+  as.tibble() %>%
+  rename(label = id) %>%
+  mutate(id=row_number()) %>%
+  select(id, label, shpcountry, rcvcountry)
+  
+edges_df_weights_2028_indegree <- MC2_graph_weights_2028_indegree %>%
+  activate(edges) %>%
+  as.tibble()
+
+MC2_nodes_extracted_weight_2028_indegree <- MC2_nodes_extracted_weight_2028_indegree %>%
+  rename(label = id)
+
+nodes_df_weights_2028_indegree <- inner_join(nodes_df_weights_2028_indegree, MC2_nodes_extracted_weight_2028_indegree, by = "label") %>%
+  select(id, label, shpcountry.x, rcvcountry.x, category)
+
+nodes_df_weights_2028_indegree <- nodes_df_weights_2028_indegree %>%
+  mutate(color = ifelse(category == "Central Carrier", "red", "grey"))
+
+names_2028_indegree <- sort(nodes_df_weights_2028_indegree$id) # for the ID nodes dropdown box
+
+vis_plot_2028_indegree <- visNetwork(nodes = nodes_df_weights_2028_indegree, edges = edges_df_weights_2028_indegree) %>%
+  visIgraphLayout(layout = "layout_with_fr", 
+                  smooth = FALSE,         
+                  physics = TRUE         
+                ) %>%
+  visNodes(size = 50) %>%
+  visEdges(color = list(highlight = "lightgray"), arrows = 'to', 
+           smooth = list(enabled = TRUE, type = "curvedCW")) %>%
+  visOptions(selectedBy = "category",
+             highlightNearest = list(enabled = TRUE,
+                                     degree = 1,
+                                     hover = TRUE,
+                                     labelOnly = TRUE),
+             nodesIdSelection = list(enabled = TRUE,
+                                     values = names_2028_indegree)) %>%
+  visLegend(width = 0.1) %>%
+  visPhysics(repulsion = list(springlength = 50), 
+             maxVelocity = 2,
+             solver = "forceAtlas2Based",
+             forceAtlas2Based = list(gravitationalConstant = -1000),
+             timestep = 0.25)
+
+vis_plot_2028_indegree
+```
+:::
+
+### 7.3 Interactive Network Graph - Eigenvector Centrality
+Here, we explore the Eigenvector Centrality network graph in an interactive manner across the various years. The below code chunk shows a sample of how we can plot an interactive network graph leveraging on the computed eigenvector centrality over the years. We first begin by converting the graph into a tibble the interactive network graph requires us to work with numerical identifiers before defining the dropdown option via VisOptions.
+
+::: panel-tabset
+### 2028
+
+```{r}
+#| echo: false
+MC2_graph_weights_2028_eigenvector <- tbl_graph(nodes = MC2_nodes_extracted_weight_2028_eigenvector, edges = MC2_edges_weight_2028_eigenvector, directed = TRUE)
+nodes_df_weights_2028_eigenvector <- MC2_graph_weights_2028_eigenvector %>%
+  activate(nodes) %>%
+  as.tibble() %>%
+  rename(label = id) %>%
+  mutate(id=row_number()) %>%
+  select(id, label, shpcountry, rcvcountry)
+  
+edges_df_weights_2028_eigenvector <- MC2_graph_weights_2028_eigenvector %>%
+  activate(edges) %>%
+  as.tibble()
+
+MC2_nodes_extracted_weight_2028_eigenvector <- MC2_nodes_extracted_weight_2028_eigenvector %>%
+  rename(label = id)
+
+nodes_df_weights_2028_eigenvector <- inner_join(nodes_df_weights_2028_eigenvector, MC2_nodes_extracted_weight_2028_eigenvector, by = "label") %>%
+  select(id, label, shpcountry.x, rcvcountry.x, category)
+
+nodes_df_weights_2028_eigenvector <- nodes_df_weights_2028_eigenvector %>%
+  mutate(color = ifelse(category == "Central Carrier", "red", "grey"))
+
+names_2028_eigenvector <- sort(nodes_df_weights_2028_eigenvector$id) # for the ID nodes dropdown box
+
+vis_plot_2028_eigenvector <- visNetwork(nodes = nodes_df_weights_2028_eigenvector, edges = edges_df_weights_2028_eigenvector) %>%
+  visIgraphLayout(layout = "layout_with_fr", 
+                  smooth = FALSE,
+                  physics = TRUE       
+                ) %>%
+  visNodes(size = 50) %>%
+  visEdges(color = list(highlight = "lightgray"), arrows = 'to', 
+           smooth = list(enabled = TRUE, type = "curvedCW")) %>%
+  visOptions(selectedBy = "category",
+             highlightNearest = list(enabled = TRUE,
+                                     degree = 1,
+                                     hover = TRUE,
+                                     labelOnly = TRUE),
+             nodesIdSelection = list(enabled = TRUE,
+                                     values = names_2028_eigenvector)) %>%
+  visLegend(width = 0.1) %>%
+  visPhysics(repulsion = list(springlength = 50), 
+             maxVelocity = 2,
+             solver = "forceAtlas2Based",
+             forceAtlas2Based = list(gravitationalConstant = -1000),
+             timestep = 0.25)
+
+vis_plot_2028_eigenvector
+```
+
+### 2029
+
+```{r}
+#| echo: false
+MC2_graph_weights_2029_eigenvector <- tbl_graph(nodes = MC2_nodes_extracted_weight_2029_eigenvector, edges = MC2_edges_weight_2029_eigenvector, directed = TRUE)
+nodes_df_weights_2029_eigenvector <- MC2_graph_weights_2029_eigenvector %>%
+  activate(nodes) %>%
+  as.tibble() %>%
+  rename(label = id) %>%
+  mutate(id=row_number()) %>%
+  select(id, label, shpcountry, rcvcountry)
+  
+edges_df_weights_2029_eigenvector <- MC2_graph_weights_2029_eigenvector %>%
+  activate(edges) %>%
+  as.tibble()
+
+MC2_nodes_extracted_weight_2029_eigenvector <- MC2_nodes_extracted_weight_2029_eigenvector %>%
+  rename(label = id)
+
+nodes_df_weights_2029_eigenvector <- inner_join(nodes_df_weights_2029_eigenvector, MC2_nodes_extracted_weight_2029_eigenvector, by = "label") %>%
+  select(id, label, shpcountry.x, rcvcountry.x, category)
+
+nodes_df_weights_2029_eigenvector <- nodes_df_weights_2029_eigenvector %>%
+  mutate(color = ifelse(category == "Central Carrier", "red", "grey"))
+
+names_2029_eigenvector <- sort(nodes_df_weights_2029_eigenvector$id) # for the ID nodes dropdown box
+
+vis_plot_2029_eigenvector <- visNetwork(nodes = nodes_df_weights_2029_eigenvector, edges = edges_df_weights_2029_eigenvector) %>%
+  visIgraphLayout(layout = "layout_with_fr",
+                  smooth = FALSE,
+                  physics = TRUE
+                ) %>%
+  visNodes(size = 50) %>%
+  visEdges(color = list(highlight = "lightgray"), arrows = 'to', 
+           smooth = list(enabled = TRUE, type = "curvedCW")) %>%
+  visOptions(selectedBy = "category",
+             highlightNearest = list(enabled = TRUE,
+                                     degree = 1,
+                                     hover = TRUE,
+                                     labelOnly = TRUE),
+             nodesIdSelection = list(enabled = TRUE,
+                                     values = names_2029_eigenvector)) %>%
+  visLegend(width = 0.1) %>%
+  visPhysics(repulsion = list(springlength = 50), 
+             maxVelocity = 2,
+             solver = "forceAtlas2Based",
+             forceAtlas2Based = list(gravitationalConstant = -1000),
+             timestep = 0.25)
+
+vis_plot_2029_eigenvector
+```
+
+### 2030
+
+```{r}
+#| echo: false
+MC2_graph_weights_2030_eigenvector <- tbl_graph(nodes = MC2_nodes_extracted_weight_2030_eigenvector, edges = MC2_edges_weight_2030_eigenvector, directed = TRUE)
+nodes_df_weights_2030_eigenvector <- MC2_graph_weights_2030_eigenvector %>%
+  activate(nodes) %>%
+  as.tibble() %>%
+  rename(label = id) %>%
+  mutate(id=row_number()) %>%
+  select(id, label, shpcountry, rcvcountry)
+  
+edges_df_weights_2030_eigenvector <- MC2_graph_weights_2030_eigenvector %>%
+  activate(edges) %>%
+  as.tibble()
+
+MC2_nodes_extracted_weight_2030_eigenvector <- MC2_nodes_extracted_weight_2030_eigenvector %>%
+  rename(label = id)
+
+nodes_df_weights_2030_eigenvector <- inner_join(nodes_df_weights_2030_eigenvector, MC2_nodes_extracted_weight_2030_eigenvector, by = "label") %>%
+  select(id, label, shpcountry.x, rcvcountry.x, category)
+
+nodes_df_weights_2030_eigenvector <- nodes_df_weights_2030_eigenvector %>%
+  mutate(color = ifelse(category == "Central Carrier", "red", "grey"))
+
+names_2030_eigenvector <- sort(nodes_df_weights_2030_eigenvector$id) # for the ID nodes dropdown box
+
+vis_plot_2030_eigenvector <- visNetwork(nodes = nodes_df_weights_2030_eigenvector, edges = edges_df_weights_2030_eigenvector) %>%
+  visIgraphLayout(layout = "layout_with_fr", 
+                  smooth = FALSE,
+                  physics = TRUE
+                ) %>%
+  visNodes(size = 50) %>%
+  visEdges(color = list(highlight = "lightgray"), arrows = 'to', 
+           smooth = list(enabled = TRUE, type = "curvedCW")) %>%
+  visOptions(selectedBy = "category",
+             highlightNearest = list(enabled = TRUE,
+                                     degree = 1,
+                                     hover = TRUE,
+                                     labelOnly = TRUE),
+             nodesIdSelection = list(enabled = TRUE,
+                                     values = names_2030_eigenvector)) %>%
+  visLegend(width = 0.1) %>%
+  visPhysics(repulsion = list(springlength = 50), 
+             maxVelocity = 2,
+             solver = "forceAtlas2Based",
+             forceAtlas2Based = list(gravitationalConstant = -1000),
+             timestep = 0.25)
+
+vis_plot_2030_eigenvector
+```
+
+### 2031
+
+```{r}
+#| echo: false
+MC2_graph_weights_2031_eigenvector <- tbl_graph(nodes = MC2_nodes_extracted_weight_2031_eigenvector, edges = MC2_edges_weight_2031_eigenvector, directed = TRUE)
+nodes_df_weights_2031_eigenvector <- MC2_graph_weights_2031_eigenvector %>%
+  activate(nodes) %>%
+  as.tibble() %>%
+  rename(label = id) %>%
+  mutate(id=row_number()) %>%
+  select(id, label, shpcountry, rcvcountry)
+  
+edges_df_weights_2031_eigenvector <- MC2_graph_weights_2031_eigenvector %>%
+  activate(edges) %>%
+  as.tibble()
+
+MC2_nodes_extracted_weight_2031_eigenvector <- MC2_nodes_extracted_weight_2031_eigenvector %>%
+  rename(label = id)
+
+nodes_df_weights_2031_eigenvector <- inner_join(nodes_df_weights_2031_eigenvector, MC2_nodes_extracted_weight_2031_eigenvector, by = "label") %>%
+  select(id, label, shpcountry.x, rcvcountry.x, category)
+
+nodes_df_weights_2031_eigenvector <- nodes_df_weights_2031_eigenvector %>%
+  mutate(color = ifelse(category == "Central Carrier", "red", "grey"))
+
+names_2031_eigenvector <- sort(nodes_df_weights_2031_eigenvector$id) # for the ID nodes dropdown box
+
+vis_plot_2031_eigenvector <- visNetwork(nodes = nodes_df_weights_2031_eigenvector, edges = edges_df_weights_2031_eigenvector) %>%
+  visIgraphLayout(layout = "layout_with_fr",
+                  smooth = FALSE,
+                  physics = TRUE
+                ) %>%
+  visNodes(size = 50) %>%
+  visEdges(color = list(highlight = "lightgray"), arrows = 'to', 
+           smooth = list(enabled = TRUE, type = "curvedCW")) %>%
+  visOptions(selectedBy = "category",
+             highlightNearest = list(enabled = TRUE,
+                                     degree = 1,
+                                     hover = TRUE,
+                                     labelOnly = TRUE),
+             nodesIdSelection = list(enabled = TRUE,
+                                     values = names_2031_eigenvector)) %>%
+  visLegend(width = 0.1) %>%
+  visPhysics(repulsion = list(springlength = 50),
+             maxVelocity = 2,
+             solver = "forceAtlas2Based",
+             forceAtlas2Based = list(gravitationalConstant = -1000),
+             timestep = 0.25)
+
+vis_plot_2031_eigenvector
+```
+
+### 2032
+
+```{r}
+#| echo: false
+MC2_graph_weights_2032_eigenvector <- tbl_graph(nodes = MC2_nodes_extracted_weight_2032_eigenvector, edges = MC2_edges_weight_2032_eigenvector, directed = TRUE)
+nodes_df_weights_2032_eigenvector <- MC2_graph_weights_2032_eigenvector %>%
+  activate(nodes) %>%
+  as.tibble() %>%
+  rename(label = id) %>%
+  mutate(id=row_number()) %>%
+  select(id, label, shpcountry, rcvcountry)
+  
+edges_df_weights_2032_eigenvector <- MC2_graph_weights_2032_eigenvector %>%
+  activate(edges) %>%
+  as.tibble()
+
+MC2_nodes_extracted_weight_2032_eigenvector <- MC2_nodes_extracted_weight_2032_eigenvector %>%
+  rename(label = id)
+
+nodes_df_weights_2032_eigenvector <- inner_join(nodes_df_weights_2032_eigenvector, MC2_nodes_extracted_weight_2032_eigenvector, by = "label") %>%
+  select(id, label, shpcountry.x, rcvcountry.x, category)
+
+nodes_df_weights_2032_eigenvector <- nodes_df_weights_2032_eigenvector %>%
+  mutate(color = ifelse(category == "Central Carrier", "red", "grey"))
+
+names_2032_eigenvector <- sort(nodes_df_weights_2032_eigenvector$id) # for the ID nodes dropdown box
+
+vis_plot_2032_eigenvector <- visNetwork(nodes = nodes_df_weights_2032_eigenvector, edges = edges_df_weights_2032_eigenvector) %>%
+  visIgraphLayout(layout = "layout_with_fr",
+                  smooth = FALSE,
+                  physics = TRUE
+                ) %>%
+  visNodes(size = 50) %>%
+  visEdges(color = list(highlight = "lightgray"), arrows = 'to', 
+           smooth = list(enabled = TRUE, type = "curvedCW")) %>%
+  visOptions(selectedBy = "category",
+             highlightNearest = list(enabled = TRUE,
+                                     degree = 1,
+                                     hover = TRUE,
+                                     labelOnly = TRUE),
+             nodesIdSelection = list(enabled = TRUE,
+                                     values = names_2032_eigenvector)) %>%
+  visLegend(width = 0.1) %>%
+  visPhysics(repulsion = list(springlength = 50),
+             maxVelocity = 2,
+             solver = "forceAtlas2Based",
+             forceAtlas2Based = list(gravitationalConstant = -1000),
+             timestep = 0.25)
+
+vis_plot_2032_eigenvector
+```
+
+### 2033
+
+```{r}
+#| echo: false
+MC2_graph_weights_2033_eigenvector <- tbl_graph(nodes = MC2_nodes_extracted_weight_2033_eigenvector, edges = MC2_edges_weight_2033_eigenvector, directed = TRUE)
+nodes_df_weights_2033_eigenvector <- MC2_graph_weights_2033_eigenvector %>%
+  activate(nodes) %>%
+  as.tibble() %>%
+  rename(label = id) %>%
+  mutate(id=row_number()) %>%
+  select(id, label, shpcountry, rcvcountry)
+  
+edges_df_weights_2033_eigenvector <- MC2_graph_weights_2033_eigenvector %>%
+  activate(edges) %>%
+  as.tibble()
+
+MC2_nodes_extracted_weight_2033_eigenvector <- MC2_nodes_extracted_weight_2033_eigenvector %>%
+  rename(label = id)
+
+nodes_df_weights_2033_eigenvector <- inner_join(nodes_df_weights_2033_eigenvector, MC2_nodes_extracted_weight_2033_eigenvector, by = "label") %>%
+  select(id, label, shpcountry.x, rcvcountry.x, category)
+
+nodes_df_weights_2033_eigenvector <- nodes_df_weights_2033_eigenvector %>%
+  mutate(color = ifelse(category == "Central Carrier", "red", "grey"))
+
+names_2033_eigenvector <- sort(nodes_df_weights_2033_eigenvector$id) # for the ID nodes dropdown box
+
+vis_plot_2033_eigenvector <- visNetwork(nodes = nodes_df_weights_2033_eigenvector, edges = edges_df_weights_2033_eigenvector) %>%
+  visIgraphLayout(layout = "layout_with_fr",
+                  smooth = FALSE,
+                  physics = TRUE
+                ) %>%
+  visNodes(size = 50) %>%
+  visEdges(color = list(highlight = "lightgray"), arrows = 'to', 
+           smooth = list(enabled = TRUE, type = "curvedCW")) %>%
+  visOptions(selectedBy = "category",
+             highlightNearest = list(enabled = TRUE,
+                                     degree = 1,
+                                     hover = TRUE,
+                                     labelOnly = TRUE),
+             nodesIdSelection = list(enabled = TRUE,
+                                     values = names_2033_eigenvector)) %>%
+  visLegend(width = 0.1) %>%
+  visPhysics(repulsion = list(springlength = 50),
+             maxVelocity = 2,
+             solver = "forceAtlas2Based",
+             forceAtlas2Based = list(gravitationalConstant = -1000),
+             timestep = 0.25)
+
+vis_plot_2033_eigenvector
+```
+
+### 2034
+
+```{r}
+#| echo: false
+MC2_graph_weights_2034_eigenvector <- tbl_graph(nodes = MC2_nodes_extracted_weight_2034_eigenvector, edges = MC2_edges_weight_2034_eigenvector, directed = TRUE)
+nodes_df_weights_2034_eigenvector <- MC2_graph_weights_2034_eigenvector %>%
+  activate(nodes) %>%
+  as.tibble() %>%
+  rename(label = id) %>%
+  mutate(id=row_number()) %>%
+  select(id, label, shpcountry, rcvcountry)
+  
+edges_df_weights_2034_eigenvector <- MC2_graph_weights_2034_eigenvector %>%
+  activate(edges) %>%
+  as.tibble()
+
+MC2_nodes_extracted_weight_2034_eigenvector <- MC2_nodes_extracted_weight_2034_eigenvector %>%
+  rename(label = id)
+
+nodes_df_weights_2034_eigenvector <- inner_join(nodes_df_weights_2034_eigenvector, MC2_nodes_extracted_weight_2034_eigenvector, by = "label") %>%
+  select(id, label, shpcountry.x, rcvcountry.x, category)
+
+nodes_df_weights_2034_eigenvector <- nodes_df_weights_2034_eigenvector %>%
+  mutate(color = ifelse(category == "Central Carrier", "red", "grey"))
+
+names_2034_eigenvector <- sort(nodes_df_weights_2034_eigenvector$id) # for the ID nodes dropdown box
+
+vis_plot_2034_eigenvector <- visNetwork(nodes = nodes_df_weights_2034_eigenvector, edges = edges_df_weights_2034_eigenvector) %>%
+  visIgraphLayout(layout = "layout_with_fr",
+                  smooth = FALSE,
+                  physics = TRUE
+                ) %>%
+  visNodes(size = 50) %>%
+  visEdges(color = list(highlight = "lightgray"), arrows = 'to', 
+           smooth = list(enabled = TRUE, type = "curvedCW")) %>%
+  visOptions(selectedBy = "category",
+             highlightNearest = list(enabled = TRUE,
+                                     degree = 1,
+                                     hover = TRUE,
+                                     labelOnly = TRUE),
+             nodesIdSelection = list(enabled = TRUE,
+                                     values = names_2034_eigenvector)) %>%
+  visLegend(width = 0.1) %>%
+  visPhysics(repulsion = list(springlength = 50),
+             maxVelocity = 2,
+             solver = "forceAtlas2Based",
+             forceAtlas2Based = list(gravitationalConstant = -1000),
+             timestep = 0.25)
+
+vis_plot_2034_eigenvector
+```
+
+### Code Chunk
+
+```{r}
+#| eval: false
+MC2_graph_weights_2028_eigenvector <- tbl_graph(nodes = MC2_nodes_extracted_weight_2028_eigenvector, edges = MC2_edges_weight_2028_eigenvector, directed = TRUE)
+nodes_df_weights_2028_eigenvector <- MC2_graph_weights_2028_eigenvector %>%
+  activate(nodes) %>%
+  as.tibble() %>%
+  rename(label = id) %>%
+  mutate(id=row_number()) %>%
+  select(id, label, shpcountry, rcvcountry)
+  
+edges_df_weights_2028_eigenvector <- MC2_graph_weights_2028_eigenvector %>%
+  activate(edges) %>%
+  as.tibble()
+
+MC2_nodes_extracted_weight_2028_eigenvector <- MC2_nodes_extracted_weight_2028_eigenvector %>%
+  rename(label = id)
+
+nodes_df_weights_2028_eigenvector <- inner_join(nodes_df_weights_2028_eigenvector, MC2_nodes_extracted_weight_2028_eigenvector, by = "label") %>%
+  select(id, label, shpcountry.x, rcvcountry.x, category)
+
+nodes_df_weights_2028_eigenvector <- nodes_df_weights_2028_eigenvector %>%
+  mutate(color = ifelse(category == "Central Carrier", "red", "grey"))
+
+names_2028_eigenvector <- sort(nodes_df_weights_2028_eigenvector$id) # for the ID nodes dropdown box
+
+vis_plot_2028_eigenvector <- visNetwork(nodes = nodes_df_weights_2028_eigenvector, edges = edges_df_weights_2028_eigenvector) %>%
+  visIgraphLayout(layout = "layout_with_fr", 
+                  smooth = FALSE,         
+                  physics = TRUE         
+                ) %>%
+  visNodes(size = 50) %>%
+  visEdges(color = list(highlight = "lightgray"), arrows = 'to', 
+           smooth = list(enabled = TRUE, type = "curvedCW")) %>%
+  visOptions(selectedBy = "category",
+             highlightNearest = list(enabled = TRUE,
+                                     degree = 1,
+                                     hover = TRUE,
+                                     labelOnly = TRUE),
+             nodesIdSelection = list(enabled = TRUE,
+                                     values = names_2028_eigenvector)) %>%
+  visLegend(width = 0.1) %>%
+  visPhysics(repulsion = list(springlength = 50), 
+             maxVelocity = 2,
+             solver = "forceAtlas2Based",
+             forceAtlas2Based = list(gravitationalConstant = -1000),
+             timestep = 0.25)
+
+vis_plot_2028_eigenvector
+```
+:::
+
+### 7.4 Ego Network
+Here, we explore the Ego network graph for a specific node: "Turkish Mussels LLC and" which was only active in 2028.
+
+```{r}
+#| code-fold: true
+#| code-summary: "Show code"
+set.seed(123)
+
+MC2_edges_weight_ego <- MC2_edges %>%
+  filter(source == "Turkish Mussels LLC and" | target == "Turkish Mussels LLC and") %>%
+  filter(hscode == "306170" | hscode == "304620" | hscode == "160414") %>%
+  group_by(source, target, hscode, year) %>%
+  summarise(weights = n(), .groups = "drop") %>%
+  filter(source != target) %>%
+  ungroup() %>%
+  group_by(source) %>%
+  mutate(noofunique_targets = n_distinct(target)) %>%
+  ungroup() 
+
+id1_weight_ego <- MC2_edges_weight_ego %>%
+  select(source) %>%
+  rename(id = source)
+id2_weight_ego <- MC2_edges_weight_ego %>%
+  select(target) %>%
+  rename(id = target)
+
+MC2_nodes_extracted_weight_ego <- rbind(id1_weight_ego, id2_weight_ego) %>% 
+  distinct()
+
+MC2_nodes_extracted_weight_ego <- left_join(MC2_nodes_extracted_weight_ego, MC2_nodes_cleaned, by = "id")
+
+# Create the graph
+MC2_graph_weights_ego <- tbl_graph(nodes=MC2_nodes_extracted_weight_ego,
+                                             edges = MC2_edges_weight_ego, 
+                                             directed = TRUE)
+
+
+MC2_graph_weights_ego <- tbl_graph(nodes = MC2_nodes_extracted_weight_ego, edges = MC2_edges_weight_ego, directed = TRUE)
+nodes_df_weights_ego <- MC2_graph_weights_ego %>%
+  activate(nodes) %>%
+  as.tibble() %>%
+  rename(label = id) %>%
+  mutate(id=row_number()) %>%
+  select(id, label, shpcountry, rcvcountry)
+  
+edges_df_weights_ego <- MC2_graph_weights_ego %>%
+  activate(edges) %>%
+  as.tibble()
+
+MC2_nodes_extracted_weight_ego <- MC2_nodes_extracted_weight_ego %>%
+  rename(label = id)
+
+nodes_df_weights_ego <- inner_join(nodes_df_weights_ego,
+                                   MC2_nodes_extracted_weight_ego, by = "label") %>%
+  select(id, label, shpcountry.x, rcvcountry.x)
+
+names_ego <- sort(nodes_df_weights_ego$id) # for the ID nodes dropdown box
+vis_plot_ego <- visNetwork(nodes = nodes_df_weights_ego, edges = edges_df_weights_ego) %>%
+  visIgraphLayout(layout = "layout_with_fr",
+                  smooth = FALSE,
+                  physics = TRUE
+                ) %>%
+  visNodes(size = 50) %>%
+  visEdges(color = list(highlight = "lightgray"), arrows = 'to', 
+           smooth = list(enabled = TRUE, type = "curvedCW")) %>%
+  visOptions(highlightNearest = list(enabled = TRUE,
+                                     degree = 1,
+                                     hover = TRUE,
+                                     labelOnly = TRUE),
+             nodesIdSelection = list(enabled = TRUE,
+                                     values = names_ego)) %>%
+  visLegend(width = 0.1) %>%
+  visPhysics(repulsion = list(springlength = 50),
+             maxVelocity = 2,
+             solver = "forceAtlas2Based",
+             forceAtlas2Based = list(gravitationalConstant = -1000),
+             timestep = 0.25)
+
+vis_plot_ego
+```
+
+## 8. Reflections
+The most difficult aspect of working with this graph is in relation to the steep learning curve and computing resources. Personally, I do not have much exposure into coding with R, and hence this was a huge challenge for me as I faced repeated roadblocks when coding or data wrangling despite several research online. Additionally, my computer's computing resources was rather limited, and I also had to spend a lot of wait time to enable it to run the codes without my computer hanging. 
+
+Thankfully, Professor Kam extended the submission due date and he was always readily available and willing to share his time to help get me up to speed. Professor Kam also helped me and the class to get up to speed by explaining data wrangling concepts very clearly, and I truly benefitted from it.
+
+I learnt a lot from this take-home exercise but I'm sure there is more to learn as knowledge graph always reveals new insights and patterns for individuals to perform analysis on. 
