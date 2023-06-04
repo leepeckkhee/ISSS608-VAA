@@ -14,14 +14,13 @@ execute:
 
 Seafood is the largest traded food commodity, providing sustenance to more than 3 billion people worldwide. The United Nations Food and Agricultural Organization estimates that 85% of fish stocks are either overfished or fully exploited.
 
-Unfortunately, illegal, unreported, and unregulated fishing is a major contributor to overfishing worldwide. According to a study conducted by the Financial Transparency Coalition, it found that IUU fishing accounts for one-fifth of the global fisheries' catches (equivalent to approximately \$23.5bn) annually. Global losses arising from IUU fishing are also estimated to be approximately \$50bn (Collyns, 2022).
+Unfortunately, illegal, unreported, and unregulated fishing is a major contributor to overfishing worldwide. According to a study conducted by the Financial Transparency Coalition, it found that IUU fishing accounts for one-fifth of the global fisheries' catches (equivalent to approximately \$23.5bn) annually. Global losses arising from IUU fishing are also estimated to be approximately \$50bn.
 
 Therefore, as part of Mini-Challenge 2 of VAST Challenge 2023, NGO FishEye International (a nonpartisan organization) is charged with understanding the social, political, and economic forces that drive the illegal fishing trade and I am addressing question 4 of MC Challenge 2. I first begin by outlining the series of steps I took to eventually arrive at my response titled "Mini-Case 2 Challenge Writeup & 4 Images" within Section 7 below.
 
 ## 2. Description of Dataset
 
-The dataset utilised for the below analysis consists of a total of 34,552 nodes and 5,464,092 direct edges (shipper to receiver). It is a directed multi-graph, hence multiple edges between the same two nodes are possible. The full details can be found on: https://vast-challenge.github.io/2023/MC2.html
-
+The dataset utilised for the below analysis consists of a total of 34,552 nodes and 5,464,092 direct edges (shipper to receiver). It is a directed multi-graph, with multiple edges between the same two nodes being a possible scenario. The full details can be found on: https://vast-challenge.github.io/2023/MC2.html
 
 ## 3. Data Wrangling and Preparation
 
@@ -207,18 +206,17 @@ Despite the below results, we will continue to keep the records at this stage, a
 ```{r}
 #| code-fold: true
 #| code-summary: "Show code"
-na_values <- colMeans(is.na(MC2_edges)) * 100
+na_percentages <- MC2_edges %>%
+  summarise(across(everything(), ~ mean(is.na(.)) * 100, .names = "NA_{.col}"))
 
-for (col in names(na_values)) {
-  cat("NA % in", col, ":", na_values[[col]], "%\n")
-}
+na_percentages
 ```
 
 ## 4. Exploratory Data Analysis
 
 ### 4.1 Shipping volume (in terms of weight kg) over the years
 
-We begin our overall exploratory data analysis by understanding the volume of fishing shipments in terms of weight (kg) over the years. We utilise ggplot to plot a bar chart over by weight-kg (y-axis) over the years (x-axis). We also utilised scale_y_continuous to format the labels to "billions". Additionally, scale_x_discrete was used to enable the x-axis to be unique values of the year variable from MC2_edges dataframe.
+We begin our overall exploratory data analysis by understanding the volume of fishing shipments in terms of weight (kg) over the years. We utilise ggplot to plot a bar chart by weight-kg (y-axis) over the years (x-axis). We also utilised scale_y\_continuous to format the labels to "billions". Additionally, scale_x\_discrete was used to enable the x-axis to be unique values of the year variable from MC2_edges dataframe.
 
 As seen from the plot below, we can see an overall increasing trend in terms of shipment volume. This makes managing IUU fishing even more pressing and urgent.
 
@@ -239,7 +237,8 @@ ggplot(MC2_edges, aes(x = as.factor(year), y = weightkg)) +
 Next, we want to better understand what are the top hscode and parent hscode within MC2_edges. We leveraged on summarize() and arrange() to obtain the top 10 most frequent occurrences of hscode and hscode_parent within MC2_edges dataset.
 
 #### 4.2.1 Top 10 Parent HSCodes
- Parent HSCodes starting with 304, 160 and 306 are the top three in terms of frequecy counts.
+
+Parent HSCodes starting with 304, 160 and 306 are the top three in terms of frequecy counts.
 
 ```{r}
 #| code-fold: true
@@ -278,7 +277,8 @@ top10_by_hscode_plot
 ```
 
 ### 4.3 Top 10 HSCodes total valueofgoodsusd and weightkg
-We calculate the top 10 HSCodes for total value of goodsusd and weightkg before combining the separate bar plots for the said two metrics into a single subplot for comparison via subplot(). 
+
+We calculate the top 10 HSCodes for total value of goodsusd and weightkg before combining the separate bar plots for the said two metrics into a single subplot for comparison via subplot().
 
 ```{r}
 #| code-fold: true
@@ -334,7 +334,8 @@ combined_plot_top10_valueofgoodsusd_weightkg
 ```
 
 ### 4.4 Bottom 10 HSCodes total valueofgoodsusd and weightkg
-We calculate the bottom 10 HSCodes for total value of goodsusd and weightkg before combining the separate bar plots for the said two metrics into a single subplot for comparison via subplot(). 
+
+We calculate the bottom 10 HSCodes for total value of goodsusd and weightkg before combining the separate bar plots for the said two metrics into a single subplot for comparison via subplot().
 
 ```{r}
 #| code-fold: true
@@ -389,9 +390,9 @@ combined_plot_bottom10_valueofgoodsusd_weightkg
 
 ```
 
+### 4.5 Top 8 Sources (per year) across the Years by varying metrics
 
-### 4.5 Top 8 Sources across the Years by varying metrics
-Within this section, we take a look a the top 8 sources across the years by weightkg and value of goods usd. We looped over the years to calculate the top 8 sources by the relevant metrics for each year, before leveraging on plot_ly() to create a line chart to visualise the trends over the years.
+Within this section, we take a look a the top 8 sources (per year) across the years by weightkg and value of goods usd. We looped over the years to calculate the top 8 sources by the relevant metrics for each year, before leveraging on plot_ly() to create a line chart to visualise the trends over the years.
 
 #### 4.5.1 Weightkg
 
@@ -482,8 +483,9 @@ line_chart <- df_valueofgoodsusd_sources %>%
 line_chart
 ```
 
-### 4.6 Top 8 Targets across the Years by varying metrics
-Within this section, we take a look a the top 8 targets across the years by weightkg and value of goods usd. We looped over the years to calculate the top 8 targets by the relevant metrics for each year, before leveraging on plot_ly() to create a line chart to visualise the trends over the years.
+### 4.6 Top 8 Targets (per year) across the Years by varying metrics
+
+Within this section, we take a look a the top 8 targets (per year) across the years by weightkg and value of goods usd. We looped over the years to calculate the top 8 targets by the relevant metrics for each year, before leveraging on plot_ly() to create a line chart to visualise the trends over the years.
 
 #### 4.6.1 Weightkg
 
@@ -642,6 +644,8 @@ In the section below, we plot a basic static graph to gain an overall view of th
 
 The below shows the code for plotting a infomap cluster which is suitable for both directed and undirected graph.
 
+We can see that there are several small sub-clusters at the rim of the plot, with a few larger clusters dominating the center.
+
 ::: panel-tabset
 ### 5.1 Infomap Clustering
 
@@ -712,7 +716,7 @@ ggraph(MC2_graph_directed_informap, layout = "fr") +
 ```
 :::
 
-The below shows the code for plotting a group components plot which primarily groups by connected components.
+The below shows the code for plotting a group components plot which primarily groups by connected components. Likewise, there are several small sub clusters at the rim of the plot. Despite further refining the group components to only show cluster 1 to 4, the results were still not optimal for visualisation. Hence, we proceed to try leading eigen clustering.
 
 ::: panel-tabset
 ### 5.2 Group Components
@@ -774,7 +778,7 @@ ggraph(MC2_graph_groupcomponents, layout = "fr") +
 ```
 :::
 
-Finally, the below shows the plot for leading eigen cluster which groups nodes based on the leading eigenvector of the modularity matrix.
+Finally, the below shows the plot for leading eigen cluster which groups nodes based on the leading eigenvector of the modularity matrix. There appaers to be a more visible clusters as seen from the plot below. Within the centre of the plot, there are at least three bigger clusters. Please refer to Section 7. where we briefly go into details on the top 3 cluster percentages.
 
 ::: panel-tabset
 ### 5.3 Leading Eigen Clustering
@@ -863,9 +867,12 @@ ggraph(MC2_graph_undirected_eigen, layout = "fr") +
 :::
 
 ## 6.1 In-Degree Centrality by Years
-Within this section, we will leverage on degree centrality and ggraph to plot a static network graph. Indegree centrality is defined in the below code via mode = "in". Note that the dataset is furthered focused into a smaller subset in the below section as we are filtering for weights which are >= quantile 0.8. 
 
-Within the code outlined in Code Chunk below, we have also defined a node to be a "Central Carrier" if it's above a threshold currently defined at 2. If otherwise, then the node will be defined as "Fishing Vessel". This value was arrived after a few trial and errors before deciding that this was an optimal value. This helps us to detect transshipments which are frequent perpetrators of IUU fishing occuring out at sea.
+Within this section, we will leverage on degree centrality and ggraph to plot a static network graph. Indegree centrality is defined in the below code via mode = "in". Note that the dataset is furthered focused into a smaller subset in the below section as we are filtering for weights which are \>= quantile 0.8.
+
+Within the code outlined in Code Chunk below, we have also defined a node to be a "Central Carrier" if it's above a threshold currently defined at 2. If otherwise, then the node will be defined as "Fishing Vessel". This value was arrived after a few trial and errors before deciding that this was an optimal value. This can potentially help us to detect transshipments which are frequent perpetrators that promotes IUU fishing occuring out at sea. A high indegree centrality for transhipment (otherwise labeled as a Central Carrier) can be viewed as a critical hub for receiving goods from various nodes.
+
+There appears to be several "Central Carriers" spread out across several fishing vessels across the various years per the plots below.
 
 ::: panel-tabset
 ### 2028
@@ -1423,539 +1430,13 @@ ggraph(MC2_graph_weights_2028_indegree, layout = "fr") +
 ```
 :::
 
-## 6.2 Out-Degree Centrality by Years
-Within this section, we will leverage on degree centrality and ggraph to plot a static network graph. Out degree centrality is defined in the below code via mode = "out". Note that the dataset is furthered focused into a smaller subset in the below section as we are filtering for weights which are >= quantile 0.8. 
+## 6.2 Eigenvector Centrality by Years
 
-Within the code outlined in Code Chunk below, we have also defined a node to be a "Central Carrier" if it's above a threshold currently defined at 2. If otherwise, then the node will be defined as "Fishing Vessel". This value was arrived after a few trial and errors before deciding that this was an optimal value. This helps us to detect transshipments which are frequent perpetrators of IUU fishing occuring out at sea.
+Within this section, we will leverage on eigenvector centrality and ggraph to plot a static network graph. Eigenvector Centrality helps to detect notes that has a more transitive influence. A node who has a higher eigenvector score implies that it is connected to many nodes who also have high scores. Note that the dataset is furthered focused into a smaller subset in the below section as we are filtering for weights which are \>= quantile 0.8.
 
-::: panel-tabset
-### 2028
+Within the code outlined in Code Chunk below, we have also defined a node to be a "Central Carrier" if it's above a threshold currently defined at 0.3. If otherwise, then the node will be defined as "Fishing Vessel". This value was arrived after a few trial and errors before deciding that this was an optimal value.
 
-```{r}
-#| echo: false
-set.seed(123)
-
-MC2_edges_weight_2028_outdegree <- MC2_edges %>%
-  filter(year == 2028) %>%
-  filter(hscode == "306170" | hscode == "304620" | hscode == "160414") %>%
-  group_by(source, target, hscode, year) %>%
-  summarise(weights = n(), .groups = "drop") %>%
-  filter(source != target) %>%
-  ungroup() %>%
-  group_by(source) %>%
-  mutate(noofunique_targets = n_distinct(target)) %>%
-  ungroup() %>%
-  filter(weights >= quantile(weights, 0.80)) #or filter for unique target
-
-id1_weight_2028_outdegree <- MC2_edges_weight_2028_outdegree %>%
-  select(source) %>%
-  rename(id = source)
-id2_weight_2028_outdegree <- MC2_edges_weight_2028_outdegree %>%
-  select(target) %>%
-  rename(id = target)
-
-MC2_nodes_extracted_weight_2028_outdegree <- rbind(id1_weight_2028_outdegree, id2_weight_2028_outdegree) %>% 
-  distinct()
-
-MC2_nodes_extracted_weight_2028_outdegree <- left_join(MC2_nodes_extracted_weight_2028_outdegree, MC2_nodes_cleaned, by = "id")
-
-# Create the graph
-MC2_graph_weights_2028_outdegree <- tbl_graph(nodes=MC2_nodes_extracted_weight_2028_outdegree,
-                                             edges = MC2_edges_weight_2028_outdegree, 
-                                             directed = TRUE)
-
-# Calculate degree centrality & define threshold to assign nodes to either Central Carrier or Fishing Vessel
-outdegree_centrality_2028 <- degree(MC2_graph_weights_2028_outdegree, mode = "out")
-outdegree_threshold_2028 <- 2
-
-# Set size to degree centrality
-V(MC2_graph_weights_2028_outdegree)$size <- outdegree_centrality_2028
-
-# Assign categories based on centrality measures
-outdegree_categories_2028 <- ifelse(outdegree_centrality_2028 > outdegree_threshold_2028, "Central Carrier", "Fishing Vessel")
-
-# Store category information in MC2_nodes_extracted_weight_2028
-MC2_nodes_extracted_weight_2028_outdegree$category <- outdegree_categories_2028
-
-# Visualize the filtered graph using ggraph
-ggraph(MC2_graph_weights_2028_outdegree, layout = "fr") +
-  geom_edge_link(arrow = arrow(length = unit(0.02, "npc"))) +
-  geom_node_point(aes(color = outdegree_categories_2028, size = size)) +
-  scale_color_manual(values = c("Central Carrier" = "red", "Fishing Vessel" = "grey")) +
-  scale_size_continuous(range = c(1, 2)) +
-  theme(legend.position = "right",
-        panel.grid.major = element_blank(),
-        panel.grid.minor = element_blank(),
-        axis.ticks = element_blank(),
-        axis.text = element_blank(),
-        axis.title = element_blank(),
-        panel.background = element_rect(fill = "white"),
-        plot.title = element_text(hjust = 0.5)) +
-  labs(title = "2028 Graph based on Out-Degree Centrality")
-```
-
-### 2029
-
-```{r}
-#| echo: false
-set.seed(123)
-
-MC2_edges_weight_2029_outdegree <- MC2_edges %>%
-  filter(year == 2029) %>%
-  filter(hscode == "306170" | hscode == "304620" | hscode == "160414") %>%
-  group_by(source, target, hscode, year) %>%
-  summarise(weights = n(), .groups = "drop") %>%
-  filter(source != target) %>%
-  ungroup() %>%
-  group_by(source) %>%
-  mutate(noofunique_targets = n_distinct(target)) %>%
-  ungroup() %>%
-  filter(weights >= quantile(weights, 0.80)) #or filter for unique target
-
-id1_weight_2029_outdegree <- MC2_edges_weight_2029_outdegree %>%
-  select(source) %>%
-  rename(id = source)
-id2_weight_2029_outdegree <- MC2_edges_weight_2029_outdegree %>%
-  select(target) %>%
-  rename(id = target)
-
-MC2_nodes_extracted_weight_2029_outdegree <- rbind(id1_weight_2029_outdegree, id2_weight_2029_outdegree) %>% 
-  distinct()
-
-MC2_nodes_extracted_weight_2029_outdegree <- left_join(MC2_nodes_extracted_weight_2029_outdegree, MC2_nodes_cleaned, by = "id")
-
-# Create the graph
-MC2_graph_weights_2029_outdegree <- tbl_graph(nodes=MC2_nodes_extracted_weight_2029_outdegree,
-                                             edges = MC2_edges_weight_2029_outdegree, 
-                                             directed = TRUE)
-
-# Calculate degree centrality & define threshold to assign nodes to either Central Carrier or Fishing Vessel
-outdegree_centrality_2029 <- degree(MC2_graph_weights_2029_outdegree, mode = "out")
-outdegree_threshold_2029 <- 2
-
-# Set size to degree centrality
-V(MC2_graph_weights_2029_outdegree)$size <- outdegree_centrality_2029
-
-# Assign categories based on centrality measures
-outdegree_categories_2029 <- ifelse(outdegree_centrality_2029 > outdegree_threshold_2029, "Central Carrier", "Fishing Vessel")
-
-# Store category information in MC2_nodes_extracted_weight_2029
-MC2_nodes_extracted_weight_2029_outdegree$category <- outdegree_categories_2029
-
-# Visualize the filtered graph using ggraph
-ggraph(MC2_graph_weights_2029_outdegree, layout = "fr") +
-  geom_edge_link(arrow = arrow(length = unit(0.02, "npc"))) +
-  geom_node_point(aes(color = outdegree_categories_2029, size = size)) +
-  scale_color_manual(values = c("Central Carrier" = "red", "Fishing Vessel" = "grey")) +
-  scale_size_continuous(range = c(1, 2)) +
-  theme(legend.position = "right",
-        panel.grid.major = element_blank(),
-        panel.grid.minor = element_blank(),
-        axis.ticks = element_blank(),
-        axis.text = element_blank(),
-        axis.title = element_blank(),
-        panel.background = element_rect(fill = "white"),
-        plot.title = element_text(hjust = 0.5)) +
-  labs(title = "2029 Graph based on Out-Degree Centrality")
-```
-
-### 2030
-
-```{r}
-#| echo: false
-set.seed(123)
-
-MC2_edges_weight_2030_outdegree <- MC2_edges %>%
-  filter(year == 2030) %>%
-  filter(hscode == "306170" | hscode == "304620" | hscode == "160414") %>%
-  group_by(source, target, hscode, year) %>%
-  summarise(weights = n(), .groups = "drop") %>%
-  filter(source != target) %>%
-  ungroup() %>%
-  group_by(source) %>%
-  mutate(noofunique_targets = n_distinct(target)) %>%
-  ungroup() %>%
-  filter(weights >= quantile(weights, 0.80)) #or filter for unique target
-
-id1_weight_2030_outdegree <- MC2_edges_weight_2030_outdegree %>%
-  select(source) %>%
-  rename(id = source)
-id2_weight_2030_outdegree <- MC2_edges_weight_2030_outdegree %>%
-  select(target) %>%
-  rename(id = target)
-
-MC2_nodes_extracted_weight_2030_outdegree <- rbind(id1_weight_2030_outdegree, id2_weight_2030_outdegree) %>% 
-  distinct()
-
-MC2_nodes_extracted_weight_2030_outdegree <- left_join(MC2_nodes_extracted_weight_2030_outdegree, MC2_nodes_cleaned, by = "id")
-
-# Create the graph
-MC2_graph_weights_2030_outdegree <- tbl_graph(nodes=MC2_nodes_extracted_weight_2030_outdegree,
-                                             edges = MC2_edges_weight_2030_outdegree, 
-                                             directed = TRUE)
-
-# Calculate degree centrality & define threshold to assign nodes to either Central Carrier or Fishing Vessel
-outdegree_centrality_2030 <- degree(MC2_graph_weights_2030_outdegree, mode = "out")
-outdegree_threshold_2030 <- 2
-
-# Set size to degree centrality
-V(MC2_graph_weights_2030_outdegree)$size <- outdegree_centrality_2030
-
-# Assign categories based on centrality measures
-outdegree_categories_2030 <- ifelse(outdegree_centrality_2030 > outdegree_threshold_2030, "Central Carrier", "Fishing Vessel")
-
-# Store category information in MC2_nodes_extracted_weight_2030
-MC2_nodes_extracted_weight_2030_outdegree$category <- outdegree_categories_2030
-
-# Visualize the filtered graph using ggraph
-ggraph(MC2_graph_weights_2030_outdegree, layout = "fr") +
-  geom_edge_link(arrow = arrow(length = unit(0.02, "npc"))) +
-  geom_node_point(aes(color = outdegree_categories_2030, size = size)) +
-  scale_color_manual(values = c("Central Carrier" = "red", "Fishing Vessel" = "grey")) +
-  scale_size_continuous(range = c(1, 2)) +
-  theme(legend.position = "right",
-        panel.grid.major = element_blank(),
-        panel.grid.minor = element_blank(),
-        axis.ticks = element_blank(),
-        axis.text = element_blank(),
-        axis.title = element_blank(),
-        panel.background = element_rect(fill = "white"),
-        plot.title = element_text(hjust = 0.5)) +
-  labs(title = "2030 Graph based on Out-Degree Centrality")
-```
-
-### 2031
-
-```{r}
-#| echo: false
-set.seed(123)
-
-MC2_edges_weight_2031_outdegree <- MC2_edges %>%
-  filter(year == 2031) %>%
-  filter(hscode == "306170" | hscode == "304620" | hscode == "160414") %>%
-  group_by(source, target, hscode, year) %>%
-  summarise(weights = n(), .groups = "drop") %>%
-  filter(source != target) %>%
-  ungroup() %>%
-  group_by(source) %>%
-  mutate(noofunique_targets = n_distinct(target)) %>%
-  ungroup() %>%
-  filter(weights >= quantile(weights, 0.80)) #or filter for unique target
-
-id1_weight_2031_outdegree <- MC2_edges_weight_2031_outdegree %>%
-  select(source) %>%
-  rename(id = source)
-id2_weight_2031_outdegree <- MC2_edges_weight_2031_outdegree %>%
-  select(target) %>%
-  rename(id = target)
-
-MC2_nodes_extracted_weight_2031_outdegree <- rbind(id1_weight_2031_outdegree, id2_weight_2031_outdegree) %>% 
-  distinct()
-
-MC2_nodes_extracted_weight_2031_outdegree <- left_join(MC2_nodes_extracted_weight_2031_outdegree, MC2_nodes_cleaned, by = "id")
-
-# Create the graph
-MC2_graph_weights_2031_outdegree <- tbl_graph(nodes=MC2_nodes_extracted_weight_2031_outdegree,
-                                             edges = MC2_edges_weight_2031_outdegree, 
-                                             directed = TRUE)
-
-# Calculate degree centrality & define threshold to assign nodes to either Central Carrier or Fishing Vessel
-outdegree_centrality_2031 <- degree(MC2_graph_weights_2031_outdegree, mode = "out")
-outdegree_threshold_2031 <- 2
-
-# Set size to degree centrality
-V(MC2_graph_weights_2031_outdegree)$size <- outdegree_centrality_2031
-
-# Assign categories based on centrality measures
-outdegree_categories_2031 <- ifelse(outdegree_centrality_2031 > outdegree_threshold_2031, "Central Carrier", "Fishing Vessel")
-
-# Store category information in MC2_nodes_extracted_weight_2031
-MC2_nodes_extracted_weight_2031_outdegree$category <- outdegree_categories_2031
-
-# Visualize the filtered graph using ggraph
-ggraph(MC2_graph_weights_2031_outdegree, layout = "fr") +
-  geom_edge_link(arrow = arrow(length = unit(0.02, "npc"))) +
-  geom_node_point(aes(color = outdegree_categories_2031, size = size)) +
-  scale_color_manual(values = c("Central Carrier" = "red", "Fishing Vessel" = "grey")) +
-  scale_size_continuous(range = c(1, 2)) +
-  theme(legend.position = "right",
-        panel.grid.major = element_blank(),
-        panel.grid.minor = element_blank(),
-        axis.ticks = element_blank(),
-        axis.text = element_blank(),
-        axis.title = element_blank(),
-        panel.background = element_rect(fill = "white"),
-        plot.title = element_text(hjust = 0.5)) +
-  labs(title = "2031 Graph based on Out-Degree Centrality")
-```
-
-### 2032
-
-```{r}
-#| echo: false
-set.seed(123)
-
-MC2_edges_weight_2032_outdegree <- MC2_edges %>%
-  filter(year == 2032) %>%
-  filter(hscode == "306170" | hscode == "304620" | hscode == "160414") %>%
-  group_by(source, target, hscode, year) %>%
-  summarise(weights = n(), .groups = "drop") %>%
-  filter(source != target) %>%
-  ungroup() %>%
-  group_by(source) %>%
-  mutate(noofunique_targets = n_distinct(target)) %>%
-  ungroup() %>%
-  filter(weights >= quantile(weights, 0.80)) #or filter for unique target
-
-id1_weight_2032_outdegree <- MC2_edges_weight_2032_outdegree %>%
-  select(source) %>%
-  rename(id = source)
-id2_weight_2032_outdegree <- MC2_edges_weight_2032_outdegree %>%
-  select(target) %>%
-  rename(id = target)
-
-MC2_nodes_extracted_weight_2032_outdegree <- rbind(id1_weight_2032_outdegree, id2_weight_2032_outdegree) %>% 
-  distinct()
-
-MC2_nodes_extracted_weight_2032_outdegree <- left_join(MC2_nodes_extracted_weight_2032_outdegree, MC2_nodes_cleaned, by = "id")
-
-# Create the graph
-MC2_graph_weights_2032_outdegree <- tbl_graph(nodes=MC2_nodes_extracted_weight_2032_outdegree,
-                                             edges = MC2_edges_weight_2032_outdegree, 
-                                             directed = TRUE)
-
-# Calculate degree centrality & define threshold to assign nodes to either Central Carrier or Fishing Vessel
-outdegree_centrality_2032 <- degree(MC2_graph_weights_2032_outdegree, mode = "out")
-outdegree_threshold_2032 <- 2
-
-# Set size to degree centrality
-V(MC2_graph_weights_2032_outdegree)$size <- outdegree_centrality_2032
-
-# Assign categories based on centrality measures
-outdegree_categories_2032 <- ifelse(outdegree_centrality_2032 > outdegree_threshold_2032, "Central Carrier", "Fishing Vessel")
-
-# Store category information in MC2_nodes_extracted_weight_2032
-MC2_nodes_extracted_weight_2032_outdegree$category <- outdegree_categories_2032
-
-# Visualize the filtered graph using ggraph
-ggraph(MC2_graph_weights_2032_outdegree, layout = "fr") +
-  geom_edge_link(arrow = arrow(length = unit(0.02, "npc"))) +
-  geom_node_point(aes(color = outdegree_categories_2032, size = size)) +
-  scale_color_manual(values = c("Central Carrier" = "red", "Fishing Vessel" = "grey")) +
-  scale_size_continuous(range = c(1, 2)) +
-  theme(legend.position = "right",
-        panel.grid.major = element_blank(),
-        panel.grid.minor = element_blank(),
-        axis.ticks = element_blank(),
-        axis.text = element_blank(),
-        axis.title = element_blank(),
-        panel.background = element_rect(fill = "white"),
-        plot.title = element_text(hjust = 0.5)) +
-  labs(title = "2032 Graph based on Out-Degree Centrality")
-```
-
-### 2033
-
-```{r}
-#| echo: false
-set.seed(123)
-
-MC2_edges_weight_2033_outdegree <- MC2_edges %>%
-  filter(year == 2033) %>%
-  filter(hscode == "306170" | hscode == "304620" | hscode == "160414") %>%
-  group_by(source, target, hscode, year) %>%
-  summarise(weights = n(), .groups = "drop") %>%
-  filter(source != target) %>%
-  ungroup() %>%
-  group_by(source) %>%
-  mutate(noofunique_targets = n_distinct(target)) %>%
-  ungroup() %>%
-  filter(weights >= quantile(weights, 0.80)) #or filter for unique target
-
-id1_weight_2033_outdegree <- MC2_edges_weight_2033_outdegree %>%
-  select(source) %>%
-  rename(id = source)
-id2_weight_2033_outdegree <- MC2_edges_weight_2033_outdegree %>%
-  select(target) %>%
-  rename(id = target)
-
-MC2_nodes_extracted_weight_2033_outdegree <- rbind(id1_weight_2033_outdegree, id2_weight_2033_outdegree) %>% 
-  distinct()
-
-MC2_nodes_extracted_weight_2033_outdegree <- left_join(MC2_nodes_extracted_weight_2033_outdegree, MC2_nodes_cleaned, by = "id")
-
-# Create the graph
-MC2_graph_weights_2033_outdegree <- tbl_graph(nodes=MC2_nodes_extracted_weight_2033_outdegree,
-                                             edges = MC2_edges_weight_2033_outdegree, 
-                                             directed = TRUE)
-
-# Calculate degree centrality & define threshold to assign nodes to either Central Carrier or Fishing Vessel
-outdegree_centrality_2033 <- degree(MC2_graph_weights_2033_outdegree, mode = "out")
-outdegree_threshold_2033 <- 2
-
-# Set size to degree centrality
-V(MC2_graph_weights_2033_outdegree)$size <- outdegree_centrality_2033
-
-# Assign categories based on centrality measures
-outdegree_categories_2033 <- ifelse(outdegree_centrality_2033 > outdegree_threshold_2033, "Central Carrier", "Fishing Vessel")
-
-# Store category information in MC2_nodes_extracted_weight_2033
-MC2_nodes_extracted_weight_2033_outdegree$category <- outdegree_categories_2033
-
-# Visualize the filtered graph using ggraph
-ggraph(MC2_graph_weights_2033_outdegree, layout = "fr") +
-  geom_edge_link(arrow = arrow(length = unit(0.02, "npc"))) +
-  geom_node_point(aes(color = outdegree_categories_2033, size = size)) +
-  scale_color_manual(values = c("Central Carrier" = "red", "Fishing Vessel" = "grey")) +
-  scale_size_continuous(range = c(1, 2)) +
-  theme(legend.position = "right",
-        panel.grid.major = element_blank(),
-        panel.grid.minor = element_blank(),
-        axis.ticks = element_blank(),
-        axis.text = element_blank(),
-        axis.title = element_blank(),
-        panel.background = element_rect(fill = "white"),
-        plot.title = element_text(hjust = 0.5)) +
-  labs(title = "2033 Graph based on Out-Degree Centrality")
-```
-
-### 2034
-
-```{r}
-#| echo: false
-set.seed(123)
-
-MC2_edges_weight_2034_outdegree <- MC2_edges %>%
-  filter(year == 2034) %>%
-  filter(hscode == "306170" | hscode == "304620" | hscode == "160414") %>%
-  group_by(source, target, hscode, year) %>%
-  summarise(weights = n(), .groups = "drop") %>%
-  filter(source != target) %>%
-  ungroup() %>%
-  group_by(source) %>%
-  mutate(noofunique_targets = n_distinct(target)) %>%
-  ungroup() %>%
-  filter(weights >= quantile(weights, 0.80)) #or filter for unique target
-
-id1_weight_2034_outdegree <- MC2_edges_weight_2034_outdegree %>%
-  select(source) %>%
-  rename(id = source)
-id2_weight_2034_outdegree <- MC2_edges_weight_2034_outdegree %>%
-  select(target) %>%
-  rename(id = target)
-
-MC2_nodes_extracted_weight_2034_outdegree <- rbind(id1_weight_2034_outdegree, id2_weight_2034_outdegree) %>% 
-  distinct()
-
-MC2_nodes_extracted_weight_2034_outdegree <- left_join(MC2_nodes_extracted_weight_2034_outdegree, MC2_nodes_cleaned, by = "id")
-
-# Create the graph
-MC2_graph_weights_2034_outdegree <- tbl_graph(nodes=MC2_nodes_extracted_weight_2034_outdegree,
-                                             edges = MC2_edges_weight_2034_outdegree, 
-                                             directed = TRUE)
-
-# Calculate degree centrality & define threshold to assign nodes to either Central Carrier or Fishing Vessel
-outdegree_centrality_2034 <- degree(MC2_graph_weights_2034_outdegree, mode = "out")
-outdegree_threshold_2034 <- 2
-
-# Set size to degree centrality
-V(MC2_graph_weights_2034_outdegree)$size <- outdegree_centrality_2034
-
-# Assign categories based on centrality measures
-outdegree_categories_2034 <- ifelse(outdegree_centrality_2034 > outdegree_threshold_2034, "Central Carrier", "Fishing Vessel")
-
-# Store category information in MC2_nodes_extracted_weight_2034
-MC2_nodes_extracted_weight_2034_outdegree$category <- outdegree_categories_2034
-
-# Visualize the filtered graph using ggraph
-ggraph(MC2_graph_weights_2034_outdegree, layout = "fr") +
-  geom_edge_link(arrow = arrow(length = unit(0.02, "npc"))) +
-  geom_node_point(aes(color = outdegree_categories_2034, size = size)) +
-  scale_color_manual(values = c("Central Carrier" = "red", "Fishing Vessel" = "grey")) +
-  scale_size_continuous(range = c(1, 2)) +
-  theme(legend.position = "right",
-        panel.grid.major = element_blank(),
-        panel.grid.minor = element_blank(),
-        axis.ticks = element_blank(),
-        axis.text = element_blank(),
-        axis.title = element_blank(),
-        panel.background = element_rect(fill = "white"),
-        plot.title = element_text(hjust = 0.5)) +
-  labs(title = "2034 Graph based on Out-Degree Centrality")
-```
-
-### Code Chunk
-
-The below shows a sample code chunk of how we can plot for the year 2028. Users need to take note to configure it to the respective years they are looking to analyse.
-
-```{r}
-#| eval: false
-set.seed(123)
-
-MC2_edges_weight_2028_outdegree <- MC2_edges %>%
-  filter(year == 2028) %>%
-  filter(hscode == "306170" | hscode == "304620" | hscode == "160414") %>%
-  group_by(source, target, hscode, year) %>%
-  summarise(weights = n(), .groups = "drop") %>%
-  filter(source != target) %>%
-  ungroup() %>%
-  group_by(source) %>%
-  mutate(noofunique_targets = n_distinct(target)) %>%
-  ungroup() %>%
-  filter(weights >= quantile(weights, 0.80)) #or filter for unique target
-
-id1_weight_2028_outdegree <- MC2_edges_weight_2028_outdegree %>%
-  select(source) %>%
-  rename(id = source)
-id2_weight_2028_outdegree <- MC2_edges_weight_2028_outdegree %>%
-  select(target) %>%
-  rename(id = target)
-
-MC2_nodes_extracted_weight_2028_outdegree <- rbind(id1_weight_2028_outdegree, id2_weight_2028_outdegree) %>% 
-  distinct()
-
-MC2_nodes_extracted_weight_2028_outdegree <- left_join(MC2_nodes_extracted_weight_2028_outdegree, MC2_nodes_cleaned, by = "id")
-
-# Create the graph
-MC2_graph_weights_2028_outdegree <- tbl_graph(nodes=MC2_nodes_extracted_weight_2028_outdegree,
-                                             edges = MC2_edges_weight_2028_outdegree, 
-                                             directed = TRUE)
-
-# Calculate degree centrality & define threshold to assign nodes to either Central Carrier or Fishing Vessel
-outdegree_centrality_2028 <- degree(MC2_graph_weights_2028_outdegree, mode = "out")
-outdegree_threshold_2028 <- 2
-
-# Set size to degree centrality
-V(MC2_graph_weights_2028_outdegree)$size <- outdegree_centrality_2028
-
-# Assign categories based on centrality measures
-outdegree_categories_2028 <- ifelse(outdegree_centrality_2028 > outdegree_threshold_2028, "Central Carrier", "Fishing Vessel")
-
-# Store category information in MC2_nodes_extracted_weight_2028
-MC2_nodes_extracted_weight_2028_outdegree$category <- outdegree_categories_2028
-
-# Visualize the filtered graph using ggraph
-ggraph(MC2_graph_weights_2028_outdegree, layout = "fr") +
-  geom_edge_link(arrow = arrow(length = unit(0.02, "npc"))) +
-  geom_node_point(aes(color = outdegree_categories_2028, size = size)) +
-  scale_color_manual(values = c("Central Carrier" = "red", "Fishing Vessel" = "grey")) +
-  scale_size_continuous(range = c(1, 2)) +
-  theme(legend.position = "right",
-        panel.grid.major = element_blank(),
-        panel.grid.minor = element_blank(),
-        axis.ticks = element_blank(),
-        axis.text = element_blank(),
-        axis.title = element_blank(),
-        panel.background = element_rect(fill = "white"),
-        plot.title = element_text(hjust = 0.5)) +
-  labs(title = "2028 Graph based on Out-Degree Centrality")
-```
-:::
-
-## 6.3 Eigenvector Centrality by Years
-Within this section, we will leverage on eigenvector centrality and ggraph to plot a static network graph. Eigenvector Centrality helps to detect notes that are has a more transitive influence. A node who has a higher eigenvector score implies that it is connected to many nodes who also have high scores. Note that the dataset is furthered focused into a smaller subset in the below section as we are filtering for weights which are >= quantile 0.8. 
-
-Within the code outlined in Code Chunk below, we have also defined a node to be a "Central Carrier" if it's above a threshold currently defined at 0.3. If otherwise, then the node will be defined as "Fishing Vessel". This value was arrived after a few trial and errors before deciding that this was an optimal value. This helps us to detect transshipments which are frequent perpetrators of IUU fishing occuring out at sea.
+There appears to be a growing number of "Central Carriers" over the years, where 2028 started off with 5 key carriers identified via Eigenvector Centrality, to 2024 ending off with more than 10 identified key carriers.
 
 ::: panel-tabset
 ### 2028
@@ -2514,12 +1995,28 @@ ggraph(MC2_graph_weights_2028_eigenvector, layout = "fr") +
 :::
 
 ## 7. Visualisation and Network Insights
-## Mini-Case 2 Challenge Writeup & 4 Images
-For the purpose of mini-case 2 challenge writeup question 4, it is as per below bullet points. The supporting images are found in section 7.1 - 7.4.
 
-- IUU fishing occurrences typically occurs in the high seas. Given that transshipments are a huge potential for IUU fishing trades to occur as fishing vessels can obscure the origins of their catches that might have been caught illegally. The focus of this visualisation targets the transshipments between central carriers and fishing vessels. The visualisation outlined Section 7 serves to put forth the basis to enable the identification of companies that fit patterns of illegal fishing. 
+## Mini-Case 2 Challenge Writeup 
 
-- Leveraging on Section 7.2 Interactive Visual, “Turkish Mussels LLC and” company is one example of a company that fit a pattern of illegal fishing. It was active in 2028 with several in-degree associations with three main nodes: 1) Arena del Sol Pic, 2) Mar del Placer CJSC Transport and 3) Saltwater Sirens Limited Liability Company Marine conservation. However, “Turkish Mussels LLC and” company seems to have closed down thereafter. It appears that these three nodes are going to “Turkish Mussels LLC and” to obtain illegal catches. Arena del Sol Pic has a high outdegree centrality as it goes out to several nodes such as “Saltwater Supreme OAO Forwarding” and “Selous Game Reserve S.A. de C.V” during 2029 for example to get fish supplies. Notably, Arena del Sol Pic is still in the business even in 2034, reaching out to nodes such as “Mar del Este CJSC” which has a high indegree centrality. This seems to imply that Arena del Sol Pic is the end user of the fishing product it gets from its supplier (ie implying that it brings the fishes directly out to the market for sale).
+Given that transshipments are a huge potential for IUU fishing trades to occur as fishing vessels can obscure the origins of their catches that might have been caught illegally, the focus of this visualisation targets the transshipments between central carriers and fishing vessels. The visualisation outlined in Section 7 serves to put forth the basis to enable the identification of companies that fit patterns of illegal fishing.
+
+For the purpose of mini-case 2 challenge writeup question 4, a summary is provided per below bullet points. Further supporting images and dynamic visualisation can be found in section 7.1 - 7.4.
+
+-   We use Section 7.2 Interactive Visual to identify companies who potentially fit a pattern of illegal fishing. "Mar del Placer CJSC Transport" is one such company.
+
+-   This was detected via "Turkish Mussels LLC and" which was identified as a Central Carrier with in-degree associations from three main nodes: 1) Arena del Sol Pic, 2) Mar del Placer CJSC Transport and 3) Saltwater Sirens Limited Liability Company Marine conservation.
+
+-   When we did a deep dive on "Mar del Placer CJSC Transport" via Section 7.2 Interactive Visual, it appears to be last seen in 2030. Zooming further into the profile of the said company, it is providing fishing products to three nodes, all of which are "Central Carriers" per image below.
+
+    ![](image_1.png){width="542"}
+
+-   Arena del Sol Pic continues to still be in the business even in 2034, reaching out to nodes such as "Mar del Este CJSC" with a high indegree centrality. Coincidentally, "Mar del Este CJSC" appears to have a similar name to "Mar del Placer CJSC Transport". Per image below, "Mar del Este CJSC" conversely has a high in-degree centrality unlike "Mar del Placer CJSC Transport". This makes "Mar del Placer CJSC Transport" very suspicious as an entity involved in illegal fishing given that according to Fisheye, companies caught fishing illegally will shut down and start up under a different name again.
+
+    ![](image_2.png){width="540"}
+
+-   Looking at Section 7.3 (screencap below), it is concerning as we can see "Mar del Placer CJSC Transport" shipping its products to nodes with high eigenvector centrality (ie nodes with high transitive influence) in 2028. Additionally, we can see that it is also shipping to "Mar del Este CJSC" which implies that "Mar del Este CJSC" is getting its fishing products legally from several sources, but is also potentially getting its illegal source from "Mar del Placer CJSC Transport".
+
+    ![](image_3.png){width="535"}
 
 ### 7.1 Cluster Analysis (Leading Eigen Visual)
 
@@ -2565,7 +2062,7 @@ ggraph(MC2_graph_undirected_eigen, layout = "fr") +
   labs(title = "Clustering based on Eigenvector Centrality")
 ```
 
-It appears that the top 3 clusters (in descending order, Cluster 20, 1, 23) consists of 14.8%, 14.3% and 9.2% of the framed dataset. This seems to suggest a presence of three bigger communities/clusters. 
+It appears that the top 3 clusters (in descending order, Cluster 20, 1, 23) consists of 14.8%, 14.3% and 9.2% of the framed dataset. This seems to suggest a presence of three bigger communities/clusters.
 
 ```{r}
 #| code-fold: true
@@ -2586,6 +2083,7 @@ top_3_clusters
 ```
 
 ### 7.2 Interactive Network Graph - In-Degree Centrality
+
 Here, we explore the In-Degree Centrality network graph in an interactive manner across the various years. The below code chunk shows a sample of how we can plot an interactive network graph leveraging on the computed in-degree centrality over the years. We first begin by converting the graph into a tibble the interactive network graph requires us to work with numerical identifiers before defining the dropdown option via VisOptions.
 
 ::: panel-tabset
@@ -3007,6 +2505,7 @@ vis_plot_2028_indegree
 :::
 
 ### 7.3 Interactive Network Graph - Eigenvector Centrality
+
 Here, we explore the Eigenvector Centrality network graph in an interactive manner across the various years. The below code chunk shows a sample of how we can plot an interactive network graph leveraging on the computed eigenvector centrality over the years. We first begin by converting the graph into a tibble the interactive network graph requires us to work with numerical identifiers before defining the dropdown option via VisOptions.
 
 ::: panel-tabset
@@ -3428,7 +2927,8 @@ vis_plot_2028_eigenvector
 :::
 
 ### 7.4 Ego Network
-Here, we explore the Ego network graph for a specific node: "Turkish Mussels LLC and" which was only active in 2028.
+
+Here, we explore the Ego network graph for a specific node (Mar del Placer CJSC Transport) identified as potentially engaged in illegal fishing.
 
 ```{r}
 #| code-fold: true
@@ -3436,7 +2936,7 @@ Here, we explore the Ego network graph for a specific node: "Turkish Mussels LLC
 set.seed(123)
 
 MC2_edges_weight_ego <- MC2_edges %>%
-  filter(source == "Turkish Mussels LLC and" | target == "Turkish Mussels LLC and") %>%
+  filter(source == "Mar del Placer CJSC Transport" | target == "Mar del Placer CJSC Transport") %>%
   filter(hscode == "306170" | hscode == "304620" | hscode == "160414") %>%
   group_by(source, target, hscode, year) %>%
   summarise(weights = n(), .groups = "drop") %>%
@@ -3444,8 +2944,9 @@ MC2_edges_weight_ego <- MC2_edges %>%
   ungroup() %>%
   group_by(source) %>%
   mutate(noofunique_targets = n_distinct(target)) %>%
-  ungroup() 
-
+  ungroup() %>%
+  filter(weights >= quantile(weights, 0.80)) #or filter for unique target
+  
 id1_weight_ego <- MC2_edges_weight_ego %>%
   select(source) %>%
   rename(id = source)
@@ -3509,8 +3010,25 @@ vis_plot_ego
 ```
 
 ## 8. Reflections
-The most difficult aspect of working with this graph is in relation to the steep learning curve and computing resources. Personally, I do not have much exposure into coding with R, and hence this was a huge challenge for me as I faced repeated roadblocks when coding or data wrangling despite several research online. Additionally, my computer's computing resources was rather limited, and I also had to spend a lot of wait time to enable it to run the codes without my computer hanging. 
+
+The most difficult aspect of working with this graph is in relation to the steep learning curve and computing resources. Personally, I do not have much exposure into coding with R, and hence this was a huge challenge for me as I faced repeated roadblocks when coding or data wrangling despite several research online. Additionally, my computer's computing resources was rather limited, and I also had to spend a lot of wait time to enable it to run the codes without my computer hanging.
 
 Thankfully, Professor Kam extended the submission due date and he was always readily available and willing to share his time to help get me up to speed. Professor Kam also helped me and the class to get up to speed by explaining data wrangling concepts very clearly, and I truly benefitted from it.
 
-I learnt a lot from this take-home exercise but I'm sure there is more to learn as knowledge graph always reveals new insights and patterns for individuals to perform analysis on. 
+I learnt a lot from this take-home exercise but I'm sure there is more to learn as knowledge graph always reveals new insights and patterns for individuals to perform analysis on.
+
+## 9. Future Work
+
+Keeping in mind the computing resources constraint, the analysis was done with a few key assumptions, some of which includes setting up filters with reasonable assumptions (for example filtering to anchor towards top 3 HSCodes, and filtering to sieve out weights within a certain percentile). As part of future work, we propose to leverage on Shiny app to offer a dynamic dropdown list to enable users who have different interests and focus to easily toggle to their desired HSCodes and years for analysis.
+
+## 10. References
+
+-   https://ona-book.org/vertex-importance.html
+-   https://www.data-imaginist.com/2017/ggraph-introduction-layouts/
+-   https://kateto.net/netscix2016.html
+-   https://www.data-imaginist.com/2017/ggraph-introduction-layouts/
+-   https://tidygraph.data-imaginist.com/reference/group_graph.html
+-   https://rdrr.io/cran/igraph/
+-   https://rpubs.com/neloe/ggraph_intro
+-   https://medium.com/analytics-vidhya/social-network-analysis-in-r-part-1-ego-network-ab6b0d23ebc8
+-   https://www.theguardian.com/environment/2022/oct/26/illegal-fishing-billions-losses-developing-countries
