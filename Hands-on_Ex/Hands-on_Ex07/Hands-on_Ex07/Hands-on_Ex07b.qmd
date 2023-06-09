@@ -1,5 +1,5 @@
 ---
-title: "In-class Exercise 7b"
+title: "Hands-on Exercise 7b"
 author: "Lee Peck Khee"
 date: 2 June 2023
 date-modified: last-modified
