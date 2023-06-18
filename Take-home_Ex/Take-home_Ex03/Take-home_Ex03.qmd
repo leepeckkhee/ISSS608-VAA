@@ -2447,7 +2447,13 @@ Thankfully, Professor Kam extended the submission due date and he was always ope
 
 I learnt a lot from this take-home exercise but as always, I'm sure there is more to learn in this journey.
 
-## 8. References
+## 8. Future Work
+
+Given that there were companies who were already identified as involved in IUU fishing, it will be useful to extend this analysis to a real world context. For example, looking at company contacts and beneficial owners of the said company already identified as involved in IUU fishing, this can help us scope our analysis towards those specified company contacts and beneficial owners to see which other companies (potentially suspicious) that they interact with.
+
+Additionally, it will be useful to provide a systematic process towards identifying and grouping similar business, while leveraging on similarity measures to enable confidence in the visual groupings. 
+
+## 9. References
 
 -   https://financialtransparency.org/fishy-networks-challenges-uncovering-beneficial-owners-behind-illegal-fishing-global-south-countries/
 -   https://rpubs.com/neloe/ggraph_intro
