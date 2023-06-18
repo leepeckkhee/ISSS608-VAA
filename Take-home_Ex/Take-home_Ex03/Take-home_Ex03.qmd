@@ -1,0 +1,2457 @@
+---
+title: "Take-home Exercise 3"
+author: "Lee Peck Khee"
+date: 5 June 2023
+date-modified: last-modified
+edit: visual
+execute: 
+  echo: true
+  eval: true
+  warning: false
+---
+
+## 1. Task Overview
+
+As illegal, unreported and unregulated fishing continues to be a major contributor to overfishing worldwide, contributing to estimated global losses of approximately \$50bn, FishEye hopes to leverage on visual analytics to understand patterns and highlight anomalous groups via the usage of knowledge graph.
+
+> **For quick reference to the MC3 challenge, Question 1 write-up, please refer to Section 6.**
+
+## 2. Description of Dataset
+
+The dataset utilised for the below analysis consists of a total of 27,622 nodes 24,038 edges and 7,794 connected components. It is an undirected multi-graph in a json format.
+
+-   Possible node types include: {company and person}
+
+-   Possible node sub types include: (beneficial owner and company contacts}
+
+-   Possible edge types include: {person}
+
+-   Possible edge sub types include: {beneficial owner and company contacts}
+
+The full details can be found on: https://vast-challenge.github.io/2023/MC3.html
+
+## 3. Data Wrangling and Preparation
+
+### 3.1 Installing Requisite R packages
+
+The code chunk below uses p_load() of pacman package to check if the said packages are installed in the computer. If they are, then they will be launched into R.
+
+1.  **`jsonlite`**: Enables us to import the json file for further analysis
+
+2.  **`tidygraph`**: Enables us to manipulate, analyze, and visualize graphs using a consistent and tidy syntax
+
+3.  **`ggraph`**: An extension of the **`ggplot2`** package with tools to create visualizations of graphs and networks
+
+4.  **`visNetwork`**: Enables us to create interactive network visualizations in R
+
+5.  **`graphlayouts`**: Provides various graph layout algorithms such as Fruchterman-Reingold, Kamada-Kawai for graph visualisation
+
+6.  **`ggforce`**: Extension of the **`ggplot2`** package by providing additional plotting functions and geoms
+
+7.  **`skimr`**: Provides tools for quickly summarizing and visualizing data in a tidy format, and enables one to get a quick overview of the data
+
+8.  **`tidytext`**: Enables us to perform various text preprocessing tasks and provides functions for analyzing text data
+
+9.  **`topicmodels`**: Provides functions for fitting and analyzing topic models, as well as identifying representative words for each topic
+
+10. **`tidyverse`**: A collection of packages that enables a consistent and tidy data manipulation and analysis workflow in R
+
+```{r}
+#| code-fold: true
+#| code-summary: "Show code"
+pacman::p_load(jsonlite, tidygraph, ggraph, igraph,
+               visNetwork, graphlayouts, ggforce, 
+               skimr, tidytext, topicmodels, tidyverse)
+```
+
+### 3.2 Loading the Dataset
+
+We first start off by loading the mc3.json dataset into "mc3_data" by using fromJSON() of jsonlit package below. The resulting output is "mc3_data" and is stored as a large list R object.
+
+```{r}
+#| code-fold: true
+#| code-summary: "Show code"
+#importing json file by using jsonlite package
+mc3_data <- fromJSON("data/MC3.json")
+```
+
+### 3.3 Data Cleaning
+
+#### 3.3.1 Edge Extraction
+
+The code chunk below is used to extract the links dataframe of mc3_data and save it as tibble dataframe called mc3_edges.
+
+```{r}
+#| code-fold: true
+#| code-summary: "Show code"
+mc3_edges <- as_tibble(mc3_data$links)
+```
+
+Data cleaning is performed by utilising a combination of:
+
+-   distinct(): to remove duplicates records
+
+-   mutate() and as.character(): to convert the field data type from list to character
+
+-   filter(): to remove records where source = target
+
+```{r}
+#| code-fold: true
+#| code-summary: "Show code"
+mc3_edges <- as_tibble(mc3_data$links) %>% 
+  distinct() %>%
+  mutate(source = as.character(source),
+         target = as.character(target),
+         type = as.character(type)) %>%
+  filter(source!=target)
+```
+
+Upon further inspection, we noticed that there are cells that contains a list of strings within the source column.
+
+```{r}
+#| code-fold: true
+#| code-summary: "Show code"
+to_unpack_further <- mc3_edges[grepl("^c\\(", mc3_edges$source), ]
+to_unpack_further
+```
+
+As such, we utilised mutate() and separate_rows() to unpack the strings. Note that the key usage of separate_rows() is to handle data that are stored in a nested list format. Using separate_rows(), we can transform the data into a "tidy" format, with each value occupying its own row.
+
+```{r}
+#| code-fold: true
+#| code-summary: "Show code"
+mc3_edges <- mc3_edges %>%
+  mutate(source = gsub("^c\\(|\"\\)$", "", source)) %>%
+  separate_rows(source, sep = "\", \"") %>%
+  mutate(source = gsub("\"", "", source)) %>%
+  group_by(source, target, type) %>%
+  distinct() %>%
+  ungroup()
+```
+
+#### 3.3.2 Nodes Extraction
+
+The code chunk below is used to extract the nodes dataframe of mc3_data and save it as tibble dataframe called mc3_nodes.
+
+-   mutate() and as.character() are used to convert the field data type from list to character.
+-   as.character() is used to convert revenue_omu from list data type to numeric data type by first converting the values into character. as.numeric() will then be used thereafter to convert them into numeric data type.
+-   select() is used to re-orgnanise the order of the selected fields.
+
+```{r}
+#| code-fold: true
+#| code-summary: "Show code"
+mc3_nodes <- as_tibble(mc3_data$nodes) %>%
+  mutate(country = as.character(country),
+         id = as.character(id),
+         product_services = as.character(product_services),
+         revenue_omu = as.numeric(as.character(revenue_omu)),
+         type = as.character(type)) %>%
+  select(id, country, type, revenue_omu, product_services)
+```
+
+##### 3.3.2.1 Text Sensing with tidytext
+
+Let's attempt to first perform a simple word count of the word fish. The below code chunk calculates the number of times the word fish appears in "product_services" column. We can see that there are several nodes with product_services that are not related to fish.
+
+```{r}
+#| code-fold: true
+#| code-summary: "Show code"
+mc3_nodes %>% 
+    mutate(n_fish = str_count(product_services, "fish")) 
+```
+
+##### 3.3.2.2 Tokenisation
+
+The code chunk below leverages on unnest_token() of tidytext to split text in product_services column into individual words. First we have the output column name that will be created as the text is unnested into it (word, in this case), and then the input column that the text comes from (product_services, in this case).
+
+Note that by default, all punctuation have been stripped, and all tokens are converted to lowercase to enable easy comparison.
+
+```{r}
+#| code-fold: true
+#| code-summary: "Show code"
+token_nodes <- mc3_nodes %>%
+  unnest_tokens(word, 
+                product_services)
+```
+
+Next, let's leverage on ggplot() to visualise the words that were extracted via the below code chunk. We can see that there are several stopwords that are not meaningful, for example "of", "as" and "for" etc.
+
+::: panel-tabset
+###### Plot
+
+```{r}
+#| echo: false
+token_nodes %>%
+  count(word, sort = TRUE) %>%
+  top_n(15) %>%
+  mutate(word = reorder(word, n)) %>%
+  ggplot(aes(x = word, y = n)) +
+  geom_col(fill = "steelblue") +
+  xlab(NULL) +
+  theme_minimal() +
+  theme(
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    plot.title = element_text(hjust = 0.5)) +
+  coord_flip() +
+      labs(x = "Count",
+      y = "Unique words",
+      title = "Count of unique words found in product_services field")
+```
+
+###### Code Chunk
+
+```{r}
+#| eval: false
+token_nodes %>%
+  count(word, sort = TRUE) %>%
+  top_n(15) %>%
+  mutate(word = reorder(word, n)) %>%
+  ggplot(aes(x = word, y = n)) +
+  geom_col(fill = "steelblue") +
+  xlab(NULL) +
+  theme_minimal() +
+  theme(
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    plot.title = element_text(hjust = 0.5)) +
+  coord_flip() +
+      labs(x = "Count",
+      y = "Unique words",
+      title = "Count of unique words found in product_services field")
+```
+:::
+
+##### 3.3.2.3 Removing stopwords
+
+Therefore, we proceed to remove the stopwords via a function from the tidytext package called stop_words. Note that the anti_join() function from the dplyr package is used to remove all stopwords from the analysis.
+
+```{r}
+#| code-fold: true
+#| code-summary: "Show code"
+stopwords_removed <- token_nodes %>% 
+  anti_join(stop_words)
+```
+
+We then visualise the extracted words (without stopwords) using the below code chunk. We can see that there are still several words that are not related to our scope of analysis focusing on the fishing industry.
+
+::: panel-tabset
+###### Plot
+
+```{r}
+#| echo: false
+stopwords_removed %>%
+  count(word, sort = TRUE) %>%
+  top_n(30) %>%
+  mutate(word = reorder(word, n)) %>%
+  ggplot(aes(x = word, y = n)) +
+  geom_col(fill = "steelblue") +
+  xlab(NULL) +
+  theme_minimal() +
+  theme(
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    plot.title = element_text(hjust = 0.5)) +
+  coord_flip() +
+      labs(x = "Count",
+      y = "Unique words",
+      title = "Count of unique words found in product_services field")
+```
+
+###### Code Chunk
+
+```{r}
+#| eval: false
+stopwords_removed %>%
+  count(word, sort = TRUE) %>%
+  top_n(30) %>%
+  mutate(word = reorder(word, n)) %>%
+  ggplot(aes(x = word, y = n)) +
+  geom_col(fill = "steelblue") +
+  xlab(NULL) +
+  theme_minimal() +
+  theme(
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    plot.title = element_text(hjust = 0.5)) +
+  coord_flip() +
+      labs(x = "Count",
+      y = "Unique words",
+      title = "Count of unique words found in product_services field")
+```
+:::
+
+As such, we proceed to remove words such as "character", "0", "unknown" etc. This step was done in an iterative manner to ensure that we capture as most fishery related keywords. We then visualise the top 30 words that are closely related to our analysis scope.
+
+::: panel-tabset
+###### Plot
+
+```{r}
+#| echo: false
+stopwords_removed %>%
+  filter(!word %in% c("character", "0", "unknown", "products", 
+                      "services", "food", "related", "equipment",
+                      "accessories", "materials", "including",
+                      "industrial", "meat", "canned", "systems", "freight",
+                      "offers", "machines", "range", "processing",
+                      "steel", "transportation", "supplies", "shoes",
+                      "logistics", "vegetables", "metal", "solutions",
+                      "packaging", "source", "researcher", "freelance",
+                      "footwear", "management", "chemicals", "machinery",
+                      "plastic", "air", "components", "manufacturing",
+                      "tools", "distribution", "water", "foods", "wide",
+                      "oil", "electronic", "fruits", "adhesives",
+                      "apparel", "power", "bags", "care", "service",
+                      "casting", "industry", "household", "oils",
+                      "raw", "cargo", "technology", "specialty",
+                      "aluminum", "home", "items", "grocery", "cooked",
+                      "transport", "storage", "specialises", "smoked",
+                      "rubber", "paper", "fabrics", "electrical", "control", 
+                      "activities", "line", "dried", "production", "construction", 
+                      "pharmaceutical", "machine", "clothing", "prepared",
+                      "poultry", "canning", "product", "forwarding", "development",
+                      "include", "glue", "furniture", "consumer", "business", 
+                      "automotive", "commercial", "fabric", "dry", "chemical",
+                      "warehousing", "die", "customs", "sole", "iron",
+                      "packing", "office", "industries", "applications",
+                      "special", "preparation", "international", "beverages",
+                      "gelatin", "design", "based", "natural", "meats", "custom", 
+                      "adhesive","textile", "system", "stationery", "processed", 
+                      "leather", "electric", "dairy", "trucking", "personal", "medical", 
+                      "hot", "fats", "building", "beef")) %>%
+  count(word, sort = TRUE) %>%
+  top_n(30) %>%
+  mutate(word = reorder(word, n)) %>%
+  ggplot(aes(x = word, y = n)) +
+  geom_col(fill = "steelblue") +
+  xlab(NULL) +
+  theme_minimal() +
+  theme(
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    plot.title = element_text(hjust = 0.5)) +
+  coord_flip() +
+  labs(x = "Count",
+       y = "Unique words",
+       title = "Count of unique words found in product_services field")
+
+```
+
+###### Code Chunk
+
+```{r}
+#| eval: false
+stopwords_removed %>%
+  filter(!word %in% c("character", "0", "unknown", "products", 
+                      "services", "food", "related", "equipment",
+                      "accessories", "materials", "including",
+                      "industrial", "meat", "canned", "systems", "freight",
+                      "offers", "machines", "range", "processing",
+                      "steel", "transportation", "supplies", "shoes",
+                      "logistics", "vegetables", "metal", "solutions",
+                      "packaging", "source", "researcher", "freelance",
+                      "footwear", "management", "chemicals", "machinery",
+                      "plastic", "air", "components", "manufacturing",
+                      "tools", "distribution", "water", "foods", "wide",
+                      "oil", "electronic", "fruits", "adhesives",
+                      "apparel", "power", "bags", "care", "service",
+                      "casting", "industry", "household", "oils",
+                      "raw", "cargo", "technology", "specialty",
+                      "aluminum", "home", "items", "grocery", "cooked",
+                      "transport", "storage", "specialises", "smoked",
+                      "rubber", "paper", "fabrics", "electrical", "control", 
+                      "activities", "line", "dried", "production", "construction", 
+                      "pharmaceutical", "machine", "clothing", "prepared",
+                      "poultry", "canning", "product", "forwarding", "development",
+                      "include", "glue", "furniture", "consumer", "business", 
+                      "automotive", "commercial", "fabric", "dry", "chemical",
+                      "warehousing", "die", "customs", "sole", "iron",
+                      "packing", "office", "industries", "applications",
+                      "special", "preparation", "international", "beverages",
+                      "gelatin", "design", "based", "natural", "meats", "custom", 
+                      "adhesive","textile", "system", "stationery", "processed", 
+                      "leather", "electric", "dairy", "trucking", "personal", "medical", 
+                      "hot", "fats", "building", "beef")) %>%
+  count(word, sort = TRUE) %>%
+  top_n(30) %>%
+  mutate(word = reorder(word, n)) %>%
+  ggplot(aes(x = word, y = n)) +
+  geom_col(fill = "steelblue") +
+  xlab(NULL) +
+  theme_minimal() +
+  theme(
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    plot.title = element_text(hjust = 0.5)) +
+  coord_flip() +
+  labs(x = "Count",
+       y = "Unique words",
+       title = "Count of unique words found in product_services field")
+
+```
+:::
+
+##### 3.3.2.4 Topic Modelling
+
+We also performed topic modelling in an attempt to further bucket keywords related to fishing so that this can help aid in further refining our analysis scope for mc3_nodes subsequently. We begin by creating a document-term matrix and storing it in dtm, before applying topic modelling using LDA to obtain 5 key topics. Finally, we then extract the top 50 terms associated with each topic.
+
+Note that:
+
+-   cast_dtm(): converts the count data into a document-term matrix, with each row representing a document and each column representing a term (ie. word)
+
+-   LDA(): function from topicmodels package to create an LDA model
+
+-   terms(): extracts the most probable term associated with each topic from the LDA model
+
+```{r}
+#| code-fold: true
+#| code-summary: "Show code"
+# Create a document-term matrix
+dtm <- stopwords_removed %>%
+  count(id, word) %>%
+  cast_dtm(id, word, n)
+
+# Apply topic modeling using LDA
+lda_model <- LDA(dtm, k = 5)
+
+# Extract the terms associated with each topic
+topics <- terms(lda_model, 50)
+```
+
+##### 3.3.2.5 Filtered list of nodes related to fishing \[mc3_nodes_fish\]
+
+Therefore, mc3_nodes was then furthered refined based on the keywords we identified from the sections 3.3.2.3 and 3.3.2.4 and saved as mc3_nodes_fish
+
+```{r}
+#| code-fold: true
+#| code-summary: "Show code"
+mc3_nodes_fish <- mc3_nodes[grepl("\\b(aquatic|clams|cod|crab|crabs|crustaceans|fillet|fillets|fish(es)?|fishing|flounder|fresh|halibut|herring|lobster|marine|octopus|oysters|pacific|pollock|salmon|sea|seafood|seafoods|shellfish|shrimp|shrimps|sockeye|sole|squid|trout|tuna)\\b", mc3_nodes$product_services, ignore.case = TRUE), ]
+
+mc3_nodes_fish
+```
+
+##### 3.3.2.6 Further cleaning of mc3_nodes_fish
+
+Upon further data investigation, we noticed that there are multiple rows with same ID. Therefore, we grouped by ID, country and type to gain the summed revenue_omu by each unique record. product_services was also subsequently concatenated and updated accordingly.
+
+```{r}
+#| code-fold: true
+#| code-summary: "Show code"
+mc3_nodes_fish <- mc3_nodes_fish %>%
+  group_by(id, country, type) %>%
+  summarise(revenue_omu = sum(revenue_omu), product_services = paste(product_services, collapse = "; "), .groups = "drop")
+
+```
+
+### 3.4 Exploratory Data Analysis
+
+#### 3.4.1 mc3_edges
+
+The below code chunk leverages on skim() of skimr package to display a summary statistics of mc3_edges tibble data frame. We can observe that there are no missing values in all the fields.
+
+```{r}
+#| code-fold: true
+#| code-summary: "Show code"
+skim(mc3_edges)
+```
+
+The below code chunk leverages on datatable() of DT package to display mc3_edges tibble dataframe as an interactive table on the html document.
+
+```{r}
+#| code-fold: true
+#| code-summary: "Show code"
+DT::datatable(mc3_edges)
+```
+
+##### 3.4.1.1 Relationship categorisation
+
+First, let's take a look at the mc3_edges type of relationship categorisation. There are two main types, namely "Beneficial Owner" and "Company Contacts".
+
+::: panel-tabset
+###### Plot
+
+```{r}
+#| echo: false
+ggplot(data = mc3_edges, aes(x = type)) +
+  geom_bar(fill = "steelblue") +
+  geom_text(
+    aes(label = ..count..),
+    stat = "count",
+    vjust = -0.5,
+    size = 3) +
+  theme_minimal() +
+  theme(
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    axis.line = element_line(color = "grey", size = 0.5),
+    plot.title = element_text(hjust = 0.5)) +
+  labs(x = "Relationship Type", y = "Frequency Count") +
+  ggtitle("Distribution of Relationship Types within mc3_edges")
+```
+
+###### Code Chunk
+
+```{r}
+#| eval: false
+ggplot(data = mc3_edges, aes(x = type)) +
+  geom_bar(fill = "steelblue") +
+  geom_text(
+    aes(label = ..count..),
+    stat = "count",
+    vjust = -0.5,
+    size = 3) +
+  theme_minimal() +
+  theme(
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    axis.line = element_line(color = "grey", size = 0.5),
+    plot.title = element_text(hjust = 0.5)) +
+  labs(x = "Relationship Type", y = "Frequency Count") +
+  ggtitle("Distribution of Relationship Types within mc3_edges")
+```
+:::
+
+##### 3.4.1.2 Number of companies each respective beneficial owner owns
+
+Within this section, we calculated the number of companies each beneficial owner owns and save it as a new column in mc3_edges_bo as bo_target_count. Note that mc3_edges_bo only contains beneficial owner.
+
+We utilised:
+
+-   filter(): to filter for beneficial owner and company contact respectively
+
+-   count(): to count the number of business a beneficial owner owns, as well as the number of companies that a company contact has access to respectively
+
+```{r}
+#| code-fold: true
+#| code-summary: "Show code"
+bo_target_count <- mc3_edges %>%
+  filter(type == "Beneficial Owner") %>%
+  count(target, name = "bo_target_count")
+
+mc3_edges_bo <- mc3_edges %>%
+  filter(type == "Beneficial Owner") %>%
+  left_join(bo_target_count, by = "target") %>%
+  filter(source!=target) 
+```
+
+From the plot below, we can see that most beneficial owners usually own 1 company. We also observe that it is rare for beneficial owners to own several companies
+
+::: panel-tabset
+###### Plot
+
+```{r}
+#| echo: false
+ggplot(mc3_edges_bo, aes(x = bo_target_count)) +
+  geom_bar(fill = "steelblue") +
+  geom_text(
+    aes(label = ..count..),
+    stat = "count",
+    vjust = -0.5,
+    size = 3) +  
+  labs(x = "Number of Companies owned by Beneficial Owners", y = "Frequency Count") +
+  ggtitle("Distribution on Number of companies owned by Beneficial Owners") +
+  scale_x_continuous(breaks = seq(min(mc3_edges_bo$bo_target_count), max(mc3_edges_bo$bo_target_count), by = 1)) + 
+  theme_minimal() +
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.line = element_line(color = "grey", size = 0.5),
+        plot.title = element_text(hjust = 0.5))
+```
+
+###### Code Chunk
+
+```{r}
+#| eval: false
+ggplot(mc3_edges_bo, aes(x = bo_target_count)) +
+  geom_bar(fill = "steelblue") +
+  geom_text(
+    aes(label = ..count..),
+    stat = "count",
+    vjust = -0.5,
+    size = 3) +  
+  labs(x = "Number of Companies owned by Beneficial Owners", y = "Frequency Count") +
+  ggtitle("Distribution on Number of companies owned by Beneficial Owners") +
+  scale_x_continuous(breaks = seq(min(mc3_edges_bo$bo_target_count), max(mc3_edges_bo$bo_target_count), by = 1)) + 
+  theme_minimal() +
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.line = element_line(color = "grey", size = 0.5),
+        plot.title = element_text(hjust = 0.5))
+```
+:::
+
+##### 3.4.1.3 Number of companies each company contact is linked to
+
+Within this section, we calculated the number of companies each company contact is linked to and save it as a new column in mc3_edges_cc as cc_target_count. Likewise, we observe that company contacts are mostly linked to one companies, with a few exception where there are a minority group of company contacts that can be linked to more than 4 companies.
+
+Note that mc3_edges_cc only contains company contacts.
+
+```{r}
+#| code-fold: true
+#| code-summary: "Show code"
+cc_target_count <- mc3_edges %>%
+  filter(type == "Company Contacts") %>%
+  count(target, name = "cc_target_count")
+
+mc3_edges_cc <- mc3_edges %>%
+  filter(type == "Company Contacts") %>%
+  left_join(cc_target_count, by = "target") %>%
+  filter(source!=target)
+```
+
+::: panel-tabset
+###### Plot
+
+```{r}
+#| echo: false
+ggplot(mc3_edges_cc, aes(x = cc_target_count)) +
+  geom_bar(fill = "steelblue") +
+  geom_text(
+    aes(label = ..count..),
+    stat = "count",
+    vjust = -0.5,
+    size = 3) +    
+  labs(x = "Number of companies that Company Contacts are linked to", y = "Frequency Count") +
+  ggtitle("Distribution on Number of companies that Company Contacts are connected") +
+  scale_x_continuous(breaks = seq(min(mc3_edges_cc$cc_target_count), max(mc3_edges_cc$cc_target_count), by = 1)) + 
+  theme_minimal() +
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.line = element_line(color = "grey", size = 0.5),
+        plot.title = element_text(hjust = 0.5))
+```
+
+###### Code Chunk
+
+```{r}
+#| eval: false
+ggplot(mc3_edges_cc, aes(x = cc_target_count)) +
+  geom_bar(fill = "steelblue") +
+  geom_text(
+    aes(label = ..count..),
+    stat = "count",
+    vjust = -0.5,
+    size = 3) +    
+  labs(x = "Number of companies that Company Contacts are linked to", y = "Frequency Count") +
+  ggtitle("Distribution on Number of companies that Company Contacts are connected") +
+  scale_x_continuous(breaks = seq(min(mc3_edges_cc$cc_target_count), max(mc3_edges_cc$cc_target_count), by = 1)) + 
+  theme_minimal() +
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.line = element_line(color = "grey", size = 0.5),
+        plot.title = element_text(hjust = 0.5))
+```
+:::
+
+#### 3.4.2 mc3_nodes_fish
+
+From the table below, we can see that there are approximately 89% of data available within revenue_omu variable. Hence, we need to exercise caution when using this column due to the missing data.
+
+```{r}
+#| code-fold: true
+#| code-summary: "Show code"
+skim(mc3_nodes_fish)
+```
+
+Similar to the above, we also visualise mc3_nodes_fish via an interactive table on the html document.
+
+```{r}
+#| code-fold: true
+#| code-summary: "Show code"
+DT::datatable(mc3_nodes_fish)
+```
+
+##### 3.4.2.1 Relationship categorisation
+
+From the below plot, we can visualise the mc3_nodes types of relationship categorisation. There are three main types, namely "Beneficial Owner", "Company" and "Company Contacts".
+
+::: panel-tabset
+###### Plot
+
+```{r}
+#| echo: false
+ggplot(data = mc3_nodes, aes(x = type)) +
+  geom_bar(fill = "steelblue") +
+  geom_text(
+    aes(label = ..count..),
+    stat = "count",
+    vjust = -0.5,
+    size = 3) +
+  theme_minimal() +
+  theme(
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    axis.line = element_line(color = "grey", size = 0.5),
+    plot.title = element_text(hjust = 0.5)) +
+  labs(x = "Relationship Type", y = "Frequency Count") +
+  ggtitle("Distribution of Relationship Types within mc3_nodes")
+```
+
+###### Code Chunk
+
+```{r}
+#| eval: false
+ggplot(data = mc3_nodes, aes(x = type)) +
+  geom_bar(fill = "steelblue") +
+  geom_text(
+    aes(label = ..count..),
+    stat = "count",
+    vjust = -0.5,
+    size = 3) +
+  theme_minimal() +
+  theme(
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    axis.line = element_line(color = "grey", size = 0.5),
+    plot.title = element_text(hjust = 0.5)) +
+  labs(x = "Relationship Type", y = "Frequency Count") +
+  ggtitle("Distribution of Relationship Types within mc3_nodes")
+```
+:::
+
+Note that after cleaning to focus only on the fishing related product_services, we land at the below plot. We can observe that most of the nodes remaining are of the type "Company".
+
+::: panel-tabset
+###### Plot
+
+```{r}
+#| echo: false
+ggplot(data = mc3_nodes_fish, aes(x = type)) +
+  geom_bar(fill = "steelblue") +
+  geom_text(
+    aes(label = ..count..),
+    stat = "count",
+    vjust = -0.5,
+    size = 3) +
+  theme_minimal() +
+  theme(
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    axis.line = element_line(color = "grey", size = 0.5),
+    plot.title = element_text(hjust = 0.5)) +
+  labs(x = "Relationship Type", y = "Frequency Count") +
+  ggtitle("Distribution of Relationship Types within mc3_nodes")
+```
+
+###### Code Chunk
+
+```{r}
+#| eval: false
+ggplot(data = mc3_nodes_fish, aes(x = type)) +
+  geom_bar(fill = "steelblue") +
+  geom_text(
+    aes(label = ..count..),
+    stat = "count",
+    vjust = -0.5,
+    size = 3) +
+  theme_minimal() +
+  theme(
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    axis.line = element_line(color = "grey", size = 0.5),
+    plot.title = element_text(hjust = 0.5)) +
+  labs(x = "Relationship Type", y = "Frequency Count") +
+  ggtitle("Distribution of Relationship Types within mc3_nodes")
+```
+:::
+
+##### 3.4.2.2 Country analysis
+
+Let's take a closer look at the country analysis within mc3_nodes_fish. Country ZH, followed by Oceanus and Marebak are the top 3 countries within mc3_nodes_fish.
+
+::: panel-tabset
+###### Plot
+
+```{r}
+#| echo: false
+country_counts <- mc3_nodes_fish %>%
+  count(country) %>%
+  top_n(5, n) %>%
+  arrange(desc(n))
+
+ggplot(data = country_counts, aes(x = reorder(country, n), y = n)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  geom_text(aes(label = n), vjust = -0.5, size = 3) +
+  theme_minimal() +
+  theme(
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    axis.line = element_line(color = "grey", size = 0.5),
+    plot.title = element_text(hjust = 0.5)
+  ) +
+  labs(x = "Country", y = "Count", title = "Distribution by Country (Top 5)")
+```
+
+###### Code Chunk
+
+```{r}
+#| eval: false
+country_counts <- mc3_nodes_fish %>%
+  count(country) %>%
+  top_n(5, n) %>%
+  arrange(desc(n))
+
+ggplot(data = country_counts, aes(x = reorder(country, n), y = n)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  geom_text(aes(label = n), vjust = -0.5, size = 3) +
+  theme_minimal() +
+  theme(
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    axis.line = element_line(color = "grey", size = 0.5),
+    plot.title = element_text(hjust = 0.5)
+  ) +
+  labs(x = "Country", y = "Count", title = "Distribution by Country (Top 5)")
+```
+:::
+
+## 4. Initial Network Visualisation and Analysis
+
+### 4.1 Preparation
+
+#### 4.1.1 Ensuring that mc3_edges (all/bo/cc)'s source only contains the filtered fishing related companies
+
+This step is necessary to ensure that mc3_edges_all, mc3_edges_bo and mc3_edges_cc contains only the filtered fishing related companies. As a recap:
+
+-   mc3_edges_all contains the overall types (including beneficial owner and company contacts).
+
+-   mc3_edges_bo contains only beneficial owner type.
+
+-   mc3_edges_cc contains only company contacts type.
+
+```{r}
+#| code-fold: true
+#| code-summary: "Show code"
+mc3_edges_all <- mc3_edges %>%
+  filter(source %in% mc3_nodes_fish$id)
+
+mc3_edges_bo <- mc3_edges_bo %>%
+  filter(source %in% mc3_nodes_fish$id)
+
+mc3_edges_cc <- mc3_edges_cc %>%
+  filter(source %in% mc3_nodes_fish$id)
+```
+
+#### 4.1.2 Preparing mc3_nodes to only contain the nodes found within mc3_edges
+
+This step is necessary to ensure that the nodes in the mc3_nodes_all/bo/cc include all the source and target values from mc3_edges_all/bo/cc respectively.
+
+```{r}
+#| code-fold: true
+#| code-summary: "Show code"
+id1 <- mc3_edges_all %>%
+  select(source) %>%
+  rename(id = source)
+id2 <- mc3_edges_all %>%
+  select(target) %>%
+  rename(id = target)
+mc3_nodes_all <- rbind(id1, id2) %>%
+  distinct() %>%
+  left_join(mc3_nodes_fish, by = "id",
+            unmatched = "drop")
+
+id1_bo <- mc3_edges_bo %>%
+  select(source) %>%
+  rename(id = source)
+id2_bo <- mc3_edges_bo %>%
+  select(target) %>%
+  rename(id = target)
+mc3_nodes_bo <- rbind(id1_bo, id2_bo) %>%
+  distinct() %>%
+  left_join(mc3_nodes_fish, by = "id",
+            unmatched = "drop")
+
+id1_cc <- mc3_edges_cc %>%
+  select(source) %>%
+  rename(id = source)
+id2_cc <- mc3_edges_cc %>%
+  select(target) %>%
+  rename(id = target)
+mc3_nodes_cc <- rbind(id1_cc, id2_cc) %>%
+  distinct() %>%
+  left_join(mc3_nodes_fish,
+            unmatched = "drop")
+```
+
+#### 4.1.3 Company_metrics calculation stored to mc3_nodes_fish
+
+Within this step, we aim to calculate from the Company's perspective before storing it back to mc3_nodes_all as two new columns, namely:
+
+-   company_contact_count: how many Company Contacts does the Company have?
+
+-   beneficial_owner_count: how many Beneficial Owners does the Company have?
+
+```{r}
+#| code-fold: true
+#| code-summary: "Show code"
+company_metrics <- mc3_edges_all %>%
+  group_by(source) %>%
+  summarise(
+    company_contact_count = sum(type == "Company Contacts"),
+    beneficial_owner_count = sum(type == "Beneficial Owner")
+  ) %>%
+  ungroup()
+
+mc3_nodes_all <- mc3_nodes_all %>%
+  left_join(company_metrics, by = c("id" = "source")) %>%
+  mutate(
+    company_contact_count = ifelse(is.na(company_contact_count), 0, company_contact_count),
+    beneficial_owner_count = ifelse(is.na(beneficial_owner_count), 0, beneficial_owner_count)
+  )
+```
+
+#### 4.1.4 Revenue Quantiles within mc3_nodes_all, mc3_nodes_bo, mc3_nodes_cc
+
+Within this step below, we split the revenues into four main quantiles within mc3_nodes_all, mc3_nodes_bo and mc3_nodes_cc. Quantile 1 refers to the lowest end of the revenue scale, while Quantile 4 refers to the highest end of the revenue scale. Note that the below steps assumes that if revenue_omu is not available, it will be categorised under Quantile 1.
+
+```{r}
+#| code-fold: true
+#| code-summary: "Show code"
+mc3_nodes_all <- mc3_nodes_all %>%
+  mutate(quantile = ifelse(is.na(revenue_omu), 1, ntile(revenue_omu, 4)))
+
+quantile_counts_all <- mc3_nodes_all %>%
+  group_by(quantile) %>%
+  summarise(records = n())
+
+mc3_nodes_bo <- mc3_nodes_bo %>%
+  mutate(quantile = ifelse(is.na(revenue_omu), 1, ntile(revenue_omu, 4)))
+
+quantile_counts_bo <- mc3_nodes_bo %>%
+  group_by(quantile) %>%
+  summarise(records = n())
+
+mc3_nodes_cc <- mc3_nodes_cc %>%
+  mutate(quantile = ifelse(is.na(revenue_omu), 1, ntile(revenue_omu, 4)))
+
+quantile_counts_cc <- mc3_nodes_cc %>%
+  group_by(quantile) %>%
+  summarise(records = n())
+```
+
+### 4.2 Building the tidy graph data model
+
+#### 4.2.1 Using tbl_graph() to build a tidygraph data model for mc3_graph_all, mc3_graph_bo and mc3_graph_cc
+
+Within this section, we build a basic tidygraph data model for mc3_graph_all, mc3_graph_bo and mc3_graph_cc. Thereafter, in Section 4.2.2 to 4.2.4, we will explore the threshold to use (either top 30%, 20% or 10% based on degree/closeness/betweeness centrality) via a series of static plots.
+
+-   A higher degree centrality indicates that the node has more connections than the average number of connections as compared to other nodes.
+
+-   A higher closeness centrality indicates a shorter distance relative to all other nodes. It helps to detect nodes who can spread information very efficiently within a network.
+
+-   A higher betweenness centrality measures the extent to which a particular node lies on the path between other nodes. Nodes with high betweenness can have significant influence within a network.
+
+```{r}
+#| code-fold: true
+#| code-summary: "Show code"
+mc3_graph_all <- tbl_graph(nodes = mc3_nodes_all,
+                       edges = mc3_edges_all,
+                       directed = FALSE) %>%
+  mutate(betweenness_centrality = centrality_betweenness(),
+         closeness_centrality = centrality_closeness(),
+         degree_centrality = centrality_degree())
+
+mc3_graph_bo <- tbl_graph(nodes = mc3_nodes_bo,
+                       edges = mc3_edges_bo,
+                       directed = FALSE) %>%
+  mutate(betweenness_centrality = centrality_betweenness(),
+         closeness_centrality = centrality_closeness(),
+         degree_centrality = centrality_degree())
+
+mc3_graph_cc <- tbl_graph(nodes = mc3_nodes_cc,
+                          edges = mc3_edges_cc,
+                          directed = FALSE) %>%
+  mutate(betweenness_centrality = centrality_betweenness(),
+         closeness_centrality = centrality_closeness(),
+         degree_centrality = centrality_degree())
+```
+
+The code chunk below utilises as_tibble() to convert the three graphs (mc3_graph_all, mc3_graph_bo, mc3_graph_cc) into a tibble format.
+
+```{r}
+#| code-fold: true
+#| code-summary: "Show code"
+mc3_graph_tibble_all <- as_tibble(mc3_graph_all)
+mc3_graph_tibble_bo <- as_tibble(mc3_graph_bo)
+mc3_graph_tibble_cc <- as_tibble(mc3_graph_cc)
+```
+
+#### 4.2.2 mc3_graph_all plot
+
+##### 4.2.2.1 Degree Centrality (Company Contact Count)
+
+Within this section, we leveraged on top_frac to further filter the mc3_graph_all data set to the top 30%, 20% and 10% based on degree_centrality focusing on company contact count before determining the appropriate threshold for our subsequent analysis.
+
+::: panel-tabset
+###### Top 30%
+
+```{r}
+#| echo: false
+set.seed(123)
+
+mc3_graph_all %>%
+  top_frac(0.30, wt = degree_centrality) %>% 
+ggraph(layout = "fr") +
+  geom_edge_link() +
+  geom_node_point(aes(
+    size = degree_centrality,
+    color = company_contact_count,
+    alpha = 0.1)) +
+  scale_size_continuous(range=c(3,10))+
+  scale_color_gradient(low = "gray", high = "red") +
+  theme_graph()
+```
+
+###### Top 20%
+
+```{r}
+#| echo: false
+set.seed(123)
+
+mc3_graph_all %>%
+  top_frac(0.20, wt = degree_centrality) %>% 
+ggraph(layout = "fr") +
+  geom_edge_link() +
+  geom_node_point(aes(
+    size = degree_centrality,
+    color = company_contact_count,
+    alpha = 0.1)) +
+  scale_size_continuous(range=c(3,10))+
+  scale_color_gradient(low = "gray", high = "red") +
+  theme_graph()
+```
+
+###### Top 10%
+
+```{r}
+#| echo: false
+set.seed(123)
+
+mc3_graph_all %>%
+  top_frac(0.10, wt = degree_centrality) %>% 
+ggraph(layout = "fr") +
+  geom_edge_link() +
+  geom_node_point(aes(
+    size = degree_centrality,
+    color = company_contact_count,
+    alpha = 0.1)) +
+  scale_size_continuous(range=c(3,10))+
+  scale_color_gradient(low = "gray", high = "red") +
+  theme_graph()
+```
+
+###### Code Chunk
+
+```{r}
+#| eval: false
+set.seed(123)
+
+mc3_graph_all %>%
+  top_frac(0.30, wt = degree_centrality) %>% 
+ggraph(layout = "fr") +
+  geom_edge_link() +
+  geom_node_point(aes(
+    size = degree_centrality,
+    color = company_contact_count,
+    alpha = 0.1)) +
+  scale_size_continuous(range=c(3,10))+
+  scale_color_gradient(low = "gray", high = "red") +
+  theme_graph()
+```
+:::
+
+##### 4.2.2.2 Degree Centrality (Beneficial Owner Count)
+
+Within this section, we leveraged on top_frac to further filter the mc3_graph_all data set to the top 30%, 20% and 10% based on degree_centrality focusing on beneficial owner count before determining the appropriate threshold for our subsequent analysis.
+
+::: panel-tabset
+###### Top 30%
+
+```{r}
+#| echo: false
+set.seed(123)
+
+mc3_graph_all %>%
+  top_frac(0.30, wt = degree_centrality) %>% 
+ggraph(layout = "fr") +
+  geom_edge_link() +
+  geom_node_point(aes(
+    size = degree_centrality,
+    color = beneficial_owner_count,
+    alpha = 0.1)) +
+  scale_size_continuous(range=c(3,10))+
+  scale_color_gradient(low = "gray", high = "red") +
+  theme_graph()
+```
+
+###### Top 20%
+
+```{r}
+#| echo: false
+set.seed(123)
+
+mc3_graph_all %>%
+  top_frac(0.20, wt = degree_centrality) %>% 
+ggraph(layout = "fr") +
+  geom_edge_link() +
+  geom_node_point(aes(
+    size = degree_centrality,
+    color = beneficial_owner_count,
+    alpha = 0.1)) +
+  scale_size_continuous(range=c(3,10))+
+  scale_color_gradient(low = "gray", high = "red") +
+  theme_graph()
+```
+
+###### Top 10%
+
+```{r}
+#| echo: false
+set.seed(123)
+
+mc3_graph_all %>%
+  top_frac(0.10, wt = degree_centrality) %>% 
+ggraph(layout = "fr") +
+  geom_edge_link() +
+  geom_node_point(aes(
+    size = degree_centrality,
+    color = beneficial_owner_count,
+    alpha = 0.1)) +
+  scale_size_continuous(range=c(3,10))+
+  scale_color_gradient(low = "gray", high = "red") +
+  theme_graph()
+```
+
+###### Code Chunk
+
+```{r}
+#| eval: false
+set.seed(123)
+
+mc3_graph_all %>%
+  top_frac(0.30, wt = degree_centrality) %>% 
+ggraph(layout = "fr") +
+  geom_edge_link() +
+  geom_node_point(aes(
+    size = degree_centrality,
+    color = beneficial_owner_count,
+    alpha = 0.1)) +
+  scale_size_continuous(range=c(3,10))+
+  scale_color_gradient(low = "gray", high = "red") +
+  theme_graph()
+```
+:::
+
+##### 4.2.2.3 Closeness Centrality (Company Contact Count)
+
+Within this section, we leveraged on top_frac to further filter the mc3_graph_all data set to the top 30%, 20% and 10% based on closeness_centrality focusing on company contact count before determining the appropriate threshold for our subsequent analysis.
+
+::: panel-tabset
+###### Top 30%
+
+```{r}
+#| echo: false
+set.seed(123)
+
+mc3_graph_all %>%
+  top_frac(0.30, wt = closeness_centrality) %>% 
+ggraph(layout = "fr") +
+  geom_edge_link() +
+  geom_node_point(aes(
+    size = closeness_centrality,
+    color = company_contact_count,
+    alpha = 0.1)) +
+  scale_size_continuous(range=c(3,10))+
+  scale_color_gradient(low = "gray", high = "red") +
+  theme_graph()
+```
+
+###### Top 20%
+
+```{r}
+#| echo: false
+set.seed(123)
+
+mc3_graph_all %>%
+  top_frac(0.20, wt = closeness_centrality) %>% 
+ggraph(layout = "fr") +
+  geom_edge_link() +
+  geom_node_point(aes(
+    size = closeness_centrality,
+    color = company_contact_count,
+    alpha = 0.1)) +
+  scale_size_continuous(range=c(3,10))+
+  scale_color_gradient(low = "gray", high = "red") +
+  theme_graph()
+```
+
+###### Top 10%
+
+```{r}
+#| echo: false
+set.seed(123)
+
+mc3_graph_all %>%
+  top_frac(0.10, wt = closeness_centrality) %>% 
+ggraph(layout = "fr") +
+  geom_edge_link() +
+  geom_node_point(aes(
+    size = closeness_centrality,
+    color = company_contact_count,
+    alpha = 0.1)) +
+  scale_size_continuous(range=c(3,10))+
+  scale_color_gradient(low = "gray", high = "red") +
+  theme_graph()
+```
+
+###### Code Chunk
+
+```{r}
+#| eval: false
+set.seed(123)
+
+mc3_graph_all %>%
+  top_frac(0.30, wt = closeness_centrality) %>% 
+ggraph(layout = "fr") +
+  geom_edge_link() +
+  geom_node_point(aes(
+    size = closeness_centrality,
+    color = company_contact_count,
+    alpha = 0.1)) +
+  scale_size_continuous(range=c(3,10))+
+  scale_color_gradient(low = "gray", high = "red") +
+  theme_graph()
+```
+:::
+
+##### 4.2.2.4 Closeness Centrality (Beneficial Owner Count)
+
+Within this section, we leveraged on top_frac to further filter the mc3_graph_all data set to the top 30%, 20% and 10% based on closeness_centrality focusing on beneficial owner count before determining the appropriate threshold for our subsequent analysis.
+
+::: panel-tabset
+###### Top 30%
+
+```{r}
+#| echo: false
+set.seed(123)
+
+mc3_graph_all %>%
+  top_frac(0.30, wt = closeness_centrality) %>% 
+ggraph(layout = "fr") +
+  geom_edge_link() +
+  geom_node_point(aes(
+    size = closeness_centrality,
+    color = beneficial_owner_count,
+    alpha = 0.1)) +
+  scale_size_continuous(range=c(3,10))+
+  scale_color_gradient(low = "gray", high = "red") +
+  theme_graph()
+```
+
+###### Top 20%
+
+```{r}
+#| echo: false
+set.seed(123)
+
+mc3_graph_all %>%
+  top_frac(0.20, wt = closeness_centrality) %>% 
+ggraph(layout = "fr") +
+  geom_edge_link() +
+  geom_node_point(aes(
+    size = closeness_centrality,
+    color = beneficial_owner_count,
+    alpha = 0.1)) +
+  scale_size_continuous(range=c(3,10))+
+  scale_color_gradient(low = "gray", high = "red") +
+  theme_graph()
+```
+
+###### Top 10%
+
+```{r}
+#| echo: false
+set.seed(123)
+
+mc3_graph_all %>%
+  top_frac(0.10, wt = closeness_centrality) %>% 
+ggraph(layout = "fr") +
+  geom_edge_link() +
+  geom_node_point(aes(
+    size = closeness_centrality,
+    color = beneficial_owner_count,
+    alpha = 0.1)) +
+  scale_size_continuous(range=c(3,10))+
+  scale_color_gradient(low = "gray", high = "red") +
+  theme_graph()
+```
+
+###### Code Chunk
+
+```{r}
+#| eval: false
+set.seed(123)
+
+mc3_graph_all %>%
+  top_frac(0.30, wt = closeness_centrality) %>% 
+ggraph(layout = "fr") +
+  geom_edge_link() +
+  geom_node_point(aes(
+    size = closeness_centrality,
+    color = beneficial_owner_count,
+    alpha = 0.1)) +
+  scale_size_continuous(range=c(3,10))+
+  scale_color_gradient(low = "gray", high = "red") +
+  theme_graph()
+```
+:::
+
+##### 4.2.2.5 Betweenness Centrality (Company Contact Count)
+
+Within this section, we leveraged on top_frac to further filter the mc3_graph_all data set to the top 30%, 20% and 10% based on betweenness_centrality focusing on company contact count before determining the appropriate threshold for our subsequent analysis.
+
+::: panel-tabset
+###### Top 30%
+
+```{r}
+#| echo: false
+set.seed(123)
+
+mc3_graph_all %>%
+  top_frac(0.30, wt = betweenness_centrality) %>% 
+ggraph(layout = "fr") +
+  geom_edge_link() +
+  geom_node_point(aes(
+    size = betweenness_centrality,
+    color = company_contact_count,
+    alpha = 0.1)) +
+  scale_size_continuous(range=c(3,10))+
+  scale_color_gradient(low = "gray", high = "red") +
+  theme_graph()
+```
+
+###### Top 20%
+
+```{r}
+#| echo: false
+set.seed(123)
+
+mc3_graph_all %>%
+  top_frac(0.20, wt = betweenness_centrality) %>% 
+ggraph(layout = "fr") +
+  geom_edge_link() +
+  geom_node_point(aes(
+    size = betweenness_centrality,
+    color = company_contact_count,
+    alpha = 0.1)) +
+  scale_size_continuous(range=c(3,10))+
+  scale_color_gradient(low = "gray", high = "red") +
+  theme_graph()
+```
+
+###### Top 10%
+
+```{r}
+#| echo: false
+set.seed(123)
+
+mc3_graph_all %>%
+  top_frac(0.10, wt = betweenness_centrality) %>% 
+ggraph(layout = "fr") +
+  geom_edge_link() +
+  geom_node_point(aes(
+    size = betweenness_centrality,
+    color = company_contact_count,
+    alpha = 0.1)) +
+  scale_size_continuous(range=c(3,10))+
+  scale_color_gradient(low = "gray", high = "red") +
+  theme_graph()
+```
+
+###### Code Chunk
+
+```{r}
+#| eval: false
+set.seed(123)
+
+mc3_graph_all %>%
+  top_frac(0.30, wt = betweenness_centrality) %>% 
+ggraph(layout = "fr") +
+  geom_edge_link() +
+  geom_node_point(aes(
+    size = betweenness_centrality,
+    color = company_contact_count,
+    alpha = 0.1)) +
+  scale_size_continuous(range=c(3,10))+
+  scale_color_gradient(low = "gray", high = "red") +
+  theme_graph()
+```
+:::
+
+##### 4.2.2.6 Betweenness Centrality (Beneficial Owner Count)
+
+Within this section, we leveraged on top_frac to further filter the mc3_graph_all data set to the top 30%, 20% and 10% based on betweenness_centrality focusing on beneficial owner count before determining the appropriate threshold for our subsequent analysis.
+
+::: panel-tabset
+###### Top 30%
+
+```{r}
+#| echo: false
+set.seed(123)
+
+mc3_graph_all %>%
+  top_frac(0.30, wt = betweenness_centrality) %>% 
+ggraph(layout = "fr") +
+  geom_edge_link() +
+  geom_node_point(aes(
+    size = betweenness_centrality,
+    color = beneficial_owner_count,
+    alpha = 0.1)) +
+  scale_size_continuous(range=c(3,10))+
+  scale_color_gradient(low = "gray", high = "red") +
+  theme_graph()
+```
+
+###### Top 20%
+
+```{r}
+#| echo: false
+set.seed(123)
+
+mc3_graph_all %>%
+  top_frac(0.20, wt = betweenness_centrality) %>% 
+ggraph(layout = "fr") +
+  geom_edge_link() +
+  geom_node_point(aes(
+    size = betweenness_centrality,
+    color = beneficial_owner_count,
+    alpha = 0.1)) +
+  scale_size_continuous(range=c(3,10))+
+  scale_color_gradient(low = "gray", high = "red") +
+  theme_graph()
+```
+
+###### Top 10%
+
+```{r}
+#| echo: false
+set.seed(123)
+
+mc3_graph_all %>%
+  top_frac(0.10, wt = betweenness_centrality) %>% 
+ggraph(layout = "fr") +
+  geom_edge_link() +
+  geom_node_point(aes(
+    size = betweenness_centrality,
+    color = beneficial_owner_count,
+    alpha = 0.1)) +
+  scale_size_continuous(range=c(3,10))+
+  scale_color_gradient(low = "gray", high = "red") +
+  theme_graph()
+```
+
+###### Code Chunk
+
+```{r}
+#| eval: false
+set.seed(123)
+
+mc3_graph_all %>%
+  top_frac(0.30, wt = betweenness_centrality) %>% 
+ggraph(layout = "fr") +
+  geom_edge_link() +
+  geom_node_point(aes(
+    size = betweenness_centrality,
+    color = beneficial_owner_count,
+    alpha = 0.1)) +
+  scale_size_continuous(range=c(3,10))+
+  scale_color_gradient(low = "gray", high = "red") +
+  theme_graph()
+```
+:::
+
+#### 4.2.3 mc3_graph_bo plot
+
+##### 4.2.3.1 Degree Centrality
+
+Within this section, we leveraged on top_frac to further filter the mc3_graph_bo data set to the top 30%, 20% and 10% based on degree_centrality focusing on revenue quantile before determining the appropriate threshold for our subsequent analysis.
+
+::: panel-tabset
+###### Top 30%
+
+```{r}
+#| echo: false
+set.seed(123)
+
+mc3_graph_bo %>%
+  top_frac(0.30, wt = degree_centrality) %>% 
+ggraph(layout = "fr") +
+  geom_edge_link(aes(width = bo_target_count),
+                 alpha=0.5) +
+  scale_edge_width(range = c(0.1,5)) +
+  geom_node_point(aes(
+    size = degree_centrality,
+    color = quantile,
+    alpha = 0.1)) +
+  scale_size_continuous(range=c(1,10))+
+  theme_graph()
+```
+
+###### Top 20%
+
+```{r}
+#| echo: false
+set.seed(123)
+
+mc3_graph_bo %>%
+  top_frac(0.20, wt = degree_centrality) %>% 
+ggraph(layout = "fr") +
+  geom_edge_link(aes(width = bo_target_count),
+                 alpha=0.5) +
+  scale_edge_width(range = c(0.1,5)) +
+  geom_node_point(aes(
+    size = degree_centrality,
+    color = quantile,
+    alpha = 0.1)) +
+  scale_size_continuous(range=c(1,10))+
+  theme_graph()
+```
+
+###### Top 10%
+
+```{r}
+#| echo: false
+set.seed(123)
+
+mc3_graph_bo %>%
+  top_frac(0.10, wt = degree_centrality) %>% 
+ggraph(layout = "fr") +
+  geom_edge_link(aes(width = bo_target_count),
+                 alpha=0.5) +
+  scale_edge_width(range = c(0.1,5)) +
+  geom_node_point(aes(
+    size = degree_centrality,
+    color = quantile,
+    alpha = 0.1)) +
+  scale_size_continuous(range=c(1,10))+
+  theme_graph()
+```
+
+###### Code Chunk
+
+```{r}
+#| eval: false
+set.seed(123)
+
+mc3_graph_bo %>%
+  top_frac(0.30, wt = degree_centrality) %>% 
+ggraph(layout = "fr") +
+  geom_edge_link(aes(width = bo_target_count),
+                 alpha=0.5) +
+  scale_edge_width(range = c(0.1,5)) +
+  geom_node_point(aes(
+    size = degree_centrality,
+    color = quantile,
+    alpha = 0.1)) +
+  scale_size_continuous(range=c(1,10))+
+  theme_graph()
+```
+:::
+
+##### 4.2.3.2 Closeness Centrality
+
+Within this section, we leveraged on top_frac to further filter the mc3_graph_bo data set to the top 30%, 20% and 10% based on closeness_centrality focusing on revenue quantile before determining the appropriate threshold for our subsequent analysis.
+
+::: panel-tabset
+###### Top 30%
+
+```{r}
+#| echo: false
+set.seed(123)
+
+mc3_graph_bo %>%
+  top_frac(0.30, wt = closeness_centrality) %>% 
+ggraph(layout = "fr") +
+  geom_edge_link(aes(width = bo_target_count),
+                 alpha=0.5) +
+  scale_edge_width(range = c(0.1,5)) +
+  geom_node_point(aes(
+    size = closeness_centrality,
+    color = quantile,
+    alpha = 0.1)) +
+  scale_size_continuous(range=c(1,10))+
+  theme_graph()
+```
+
+###### Top 20%
+
+```{r}
+#| echo: false
+set.seed(123)
+
+mc3_graph_bo %>%
+  top_frac(0.20, wt = closeness_centrality) %>% 
+ggraph(layout = "fr") +
+  geom_edge_link(aes(width = bo_target_count),
+                 alpha=0.5) +
+  scale_edge_width(range = c(0.1,5)) +
+  geom_node_point(aes(
+    size = closeness_centrality,
+    color = quantile,
+    alpha = 0.1)) +
+  scale_size_continuous(range=c(1,10))+
+  theme_graph()
+```
+
+###### Top 10%
+
+```{r}
+#| echo: false
+set.seed(123)
+
+mc3_graph_bo %>%
+  top_frac(0.10, wt = closeness_centrality) %>% 
+ggraph(layout = "fr") +
+  geom_edge_link(aes(width = bo_target_count),
+                 alpha=0.5) +
+  scale_edge_width(range = c(0.1,5)) +
+  geom_node_point(aes(
+    size = closeness_centrality,
+    color = quantile,
+    alpha = 0.1)) +
+  scale_size_continuous(range=c(1,10))+
+  theme_graph()
+```
+
+###### Code Chunk
+
+```{r}
+#| eval: false
+set.seed(123)
+
+mc3_graph_bo %>%
+  top_frac(0.30, wt = closeness_centrality) %>% 
+ggraph(layout = "fr") +
+  geom_edge_link(aes(width = bo_target_count),
+                 alpha=0.5) +
+  scale_edge_width(range = c(0.1,5)) +
+  geom_node_point(aes(
+    size = closeness_centrality,
+    color = quantile,
+    alpha = 0.1)) +
+  scale_size_continuous(range=c(1,10))+
+  theme_graph()
+```
+:::
+
+##### 4.2.3.3 Betweenness Centrality
+
+Within this section, we leveraged on top_frac to further filter the mc3_graph_bo data set to the top 30%, 20% and 10% based on betweenness_centrality focusing on revenue quantile before determining the appropriate threshold for our subsequent analysis.
+
+::: panel-tabset
+###### Top 30%
+
+```{r}
+#| echo: false
+set.seed(123)
+
+mc3_graph_bo %>%
+  top_frac(0.30, wt = betweenness_centrality) %>% 
+ggraph(layout = "fr") +
+  geom_edge_link(aes(width = bo_target_count),
+                 alpha=0.5) +
+  scale_edge_width(range = c(0.1,5)) +
+  geom_node_point(aes(
+    size = betweenness_centrality,
+    color = quantile,
+    alpha = 0.1)) +
+  scale_size_continuous(range=c(1,10))+
+  theme_graph()
+```
+
+###### Top 20%
+
+```{r}
+#| echo: false
+set.seed(123)
+
+mc3_graph_bo %>%
+  top_frac(0.20, wt = betweenness_centrality) %>% 
+ggraph(layout = "fr") +
+  geom_edge_link(aes(width = bo_target_count),
+                 alpha=0.5) +
+  scale_edge_width(range = c(0.1,5)) +
+  geom_node_point(aes(
+    size = betweenness_centrality,
+    color = quantile,
+    alpha = 0.1)) +
+  scale_size_continuous(range=c(1,10))+
+  theme_graph()
+```
+
+###### Top 10%
+
+```{r}
+#| echo: false
+set.seed(123)
+
+mc3_graph_bo %>%
+  top_frac(0.10, wt = betweenness_centrality) %>% 
+ggraph(layout = "fr") +
+  geom_edge_link(aes(width = bo_target_count),
+                 alpha=0.5) +
+  scale_edge_width(range = c(0.1,5)) +
+  geom_node_point(aes(
+    size = betweenness_centrality,
+    color = quantile,
+    alpha = 0.1)) +
+  scale_size_continuous(range=c(1,10))+
+  theme_graph()
+```
+
+###### Code Chunk
+
+```{r}
+#| eval: false
+set.seed(123)
+
+mc3_graph_bo %>%
+  top_frac(0.30, wt = betweenness_centrality) %>% 
+ggraph(layout = "fr") +
+  geom_edge_link(aes(width = bo_target_count),
+                 alpha=0.5) +
+  scale_edge_width(range = c(0.1,5)) +
+  geom_node_point(aes(
+    size = betweenness_centrality,
+    color = quantile,
+    alpha = 0.1)) +
+  scale_size_continuous(range=c(1,10))+
+  theme_graph()
+```
+:::
+
+#### 4.2.4 mc3_graph_cc plot
+
+##### 4.2.4.1 Degree Centrality
+
+Within this section, we leveraged on top_frac to further filter the mc3_graph_cc data set to the top 30%, 20% and 10% based on degree_centrality focusing on revenue quantile before determining the appropriate threshold for our subsequent analysis.
+
+::: panel-tabset
+###### Top 30%
+
+```{r}
+#| echo: false
+set.seed(123)
+
+mc3_graph_cc %>%
+  top_frac(0.30, wt = degree_centrality) %>% 
+ggraph(layout = "fr") +
+  geom_edge_link(aes(width = cc_target_count),
+                 alpha=0.5) +
+  scale_edge_width(range = c(0.1,5)) +
+  geom_node_point(aes(
+    size = degree_centrality,
+    color = quantile,
+    alpha = 0.1)) +
+  scale_size_continuous(range=c(1,10))+
+  theme_graph()
+```
+
+###### Top 20%
+
+```{r}
+#| echo: false
+set.seed(123)
+
+mc3_graph_cc %>%
+  top_frac(0.20, wt = degree_centrality) %>% 
+ggraph(layout = "fr") +
+  geom_edge_link(aes(width = cc_target_count),
+                 alpha=0.5) +
+  scale_edge_width(range = c(0.1,5)) +
+  geom_node_point(aes(
+    size = degree_centrality,
+    color = quantile,
+    alpha = 0.1)) +
+  scale_size_continuous(range=c(1,10))+
+  theme_graph()
+```
+
+###### Top 10%
+
+```{r}
+#| echo: false
+set.seed(123)
+
+mc3_graph_cc %>%
+  top_frac(0.10, wt = degree_centrality) %>% 
+ggraph(layout = "fr") +
+  geom_edge_link(aes(width = cc_target_count),
+                 alpha=0.5) +
+  scale_edge_width(range = c(0.1,5)) +
+  geom_node_point(aes(
+    size = degree_centrality,
+    color = quantile,
+    alpha = 0.1)) +
+  scale_size_continuous(range=c(1,10))+
+  theme_graph()
+```
+
+###### Code Chunk
+
+```{r}
+#| eval: false
+set.seed(123)
+
+mc3_graph_cc %>%
+  top_frac(0.30, wt = degree_centrality) %>% 
+ggraph(layout = "fr") +
+  geom_edge_link(aes(width = cc_target_count),
+                 alpha=0.5) +
+  scale_edge_width(range = c(0.1,5)) +
+  geom_node_point(aes(
+    size = degree_centrality,
+    color = quantile,
+    alpha = 0.1)) +
+  scale_size_continuous(range=c(1,10))+
+  theme_graph()
+```
+:::
+
+##### 4.2.4.2 Closeness Centrality
+
+Within this section, we leveraged on top_frac to further filter the mc3_graph_cc data set to the top 30%, 20% and 10% based on closeness_centrality focusing on revenue quantile before determining the appropriate threshold for our subsequent analysis.
+
+::: panel-tabset
+###### Top 30%
+
+```{r}
+#| echo: false
+set.seed(123)
+
+mc3_graph_cc %>%
+  top_frac(0.30, wt = closeness_centrality) %>% 
+ggraph(layout = "fr") +
+  geom_edge_link(aes(width = cc_target_count),
+                 alpha=0.5) +
+  scale_edge_width(range = c(0.1,5)) +
+  geom_node_point(aes(
+    size = closeness_centrality,
+    color = quantile,
+    alpha = 0.1)) +
+  scale_size_continuous(range=c(1,10))+
+  theme_graph()
+```
+
+###### Top 20%
+
+```{r}
+#| echo: false
+set.seed(123)
+
+mc3_graph_cc %>%
+  top_frac(0.20, wt = closeness_centrality) %>% 
+ggraph(layout = "fr") +
+  geom_edge_link(aes(width = cc_target_count),
+                 alpha=0.5) +
+  scale_edge_width(range = c(0.1,5)) +
+  geom_node_point(aes(
+    size = closeness_centrality,
+    color = quantile,
+    alpha = 0.1)) +
+  scale_size_continuous(range=c(1,10))+
+  theme_graph()
+```
+
+###### Top 10%
+
+```{r}
+#| echo: false
+set.seed(123)
+
+mc3_graph_cc %>%
+  top_frac(0.10, wt = closeness_centrality) %>% 
+ggraph(layout = "fr") +
+  geom_edge_link(aes(width = cc_target_count),
+                 alpha=0.5) +
+  scale_edge_width(range = c(0.1,5)) +
+  geom_node_point(aes(
+    size = closeness_centrality,
+    color = quantile,
+    alpha = 0.1)) +
+  scale_size_continuous(range=c(1,10))+
+  theme_graph()
+```
+
+###### Code Chunk
+
+```{r}
+#| eval: false
+set.seed(123)
+
+mc3_graph_cc %>%
+  top_frac(0.30, wt = closeness_centrality) %>% 
+ggraph(layout = "fr") +
+  geom_edge_link(aes(width = cc_target_count),
+                 alpha=0.5) +
+  scale_edge_width(range = c(0.1,5)) +
+  geom_node_point(aes(
+    size = closeness_centrality,
+    color = quantile,
+    alpha = 0.1)) +
+  scale_size_continuous(range=c(1,10))+
+  theme_graph()
+```
+:::
+
+##### 4.2.4.3 Betweenness Centrality
+
+Within this section, we leveraged on top_frac to further filter the mc3_graph_cc data set to the top 30%, 20% and 10% based on betweenness_centrality focusing on revenue quantile before determining the appropriate threshold for our subsequent analysis.
+
+::: panel-tabset
+###### Top 30%
+
+```{r}
+#| echo: false
+set.seed(123)
+
+mc3_graph_cc %>%
+  top_frac(0.30, wt = betweenness_centrality) %>% 
+ggraph(layout = "fr") +
+  geom_edge_link(aes(width = cc_target_count),
+                 alpha=0.5) +
+  scale_edge_width(range = c(0.1,5)) +
+  geom_node_point(aes(
+    size = betweenness_centrality,
+    color = quantile,
+    alpha = 0.1)) +
+  scale_size_continuous(range=c(1,10))+
+  theme_graph()
+```
+
+###### Top 20%
+
+```{r}
+#| echo: false
+set.seed(123)
+
+mc3_graph_cc %>%
+  top_frac(0.20, wt = betweenness_centrality) %>% 
+ggraph(layout = "fr") +
+  geom_edge_link(aes(width = cc_target_count),
+                 alpha=0.5) +
+  scale_edge_width(range = c(0.1,5)) +
+  geom_node_point(aes(
+    size = betweenness_centrality,
+    color = quantile,
+    alpha = 0.1)) +
+  scale_size_continuous(range=c(1,10))+
+  theme_graph()
+```
+
+###### Top 10%
+
+```{r}
+#| echo: false
+set.seed(123)
+
+mc3_graph_cc %>%
+  top_frac(0.10, wt = betweenness_centrality) %>% 
+ggraph(layout = "fr") +
+  geom_edge_link(aes(width = cc_target_count),
+                 alpha=0.5) +
+  scale_edge_width(range = c(0.1,5)) +
+  geom_node_point(aes(
+    size = betweenness_centrality,
+    color = quantile,
+    alpha = 0.1)) +
+  scale_size_continuous(range=c(1,10))+
+  theme_graph()
+```
+
+###### Code Chunk
+
+```{r}
+#| eval: false
+set.seed(123)
+
+mc3_graph_cc %>%
+  top_frac(0.30, wt = betweenness_centrality) %>% 
+ggraph(layout = "fr") +
+  geom_edge_link(aes(width = cc_target_count),
+                 alpha=0.5) +
+  scale_edge_width(range = c(0.1,5)) +
+  geom_node_point(aes(
+    size = betweenness_centrality,
+    color = quantile,
+    alpha = 0.1)) +
+  scale_size_continuous(range=c(1,10))+
+  theme_graph()
+```
+:::
+
+### 4.3 Computing Degree, Betweenness & Closeness Centrality to store within mc3_nodes_all
+
+Within this section, we compute degree, betweenness and closeness centrality metrics and store it within mc3_nodes_all for easy reference in our subsequent analysis.
+
+```{r}
+#| code-fold: true
+#| code-summary: "Show code"
+closenesscentrality <- closeness(mc3_graph_all, mode = "all")
+mc3_nodes_all <- mc3_nodes_all %>%
+  mutate(closenesscentrality = closenesscentrality)
+
+degreecentrality <- degree(mc3_graph_all, mode = "all")
+mc3_nodes_all <- mc3_nodes_all %>%
+  mutate(degreecentrality = degreecentrality)
+
+betweennesscentrality <- betweenness(mc3_graph_all, directed = FALSE)
+mc3_nodes_all <- mc3_nodes_all %>%
+  mutate(betweennesscentrality = betweennesscentrality)
+```
+
+### 4.4 Filtered Thresholds (by degree centrality)
+
+After reviewing the above plots in section 4.2, we are of the view to gain a deeper insight via the top 20% nodes in terms of degree centrality.
+
+![](image_1.png)This is because nodes with a higher degree centrality will have a high number of interacting neighbours. This might potentially help us to identify anomalies within the knowledge graph as companies who are involved in illegal fishing are more likely to have more beneficial owners.
+
+According to an article "Fishy networks: Uncovering the companies and individuals behind illegal fishing globally", it indicated that unscrupulous operators of vessels involved in IUU fishing takes advantage of a lack of regulations by using complex ownership structures to hide the identities of their ultimate beneficial owners (UBOs). Therefore, a company with more beneficial owners (and correspondingly a higher degree centrality) might be worth looking into further.
+
+Likewise, illegal fishing typically involve complex network amongst various actors such as fishing companies, wholesalers and suppliers etc. Therefore, a higher number of company contacts can provide illegal fishing companies with access to valuable resources, markets and revenues to enable their illegal activtities. Therefore, it is worthwhile looking a high degree centrality perspective in relation to company contacts.
+
+The below code chunk defines the various threshold for mc3_graph_all, mc3_graph_bo and mc3_graph_cc by the top 20% degree centrality.
+
+```{r}
+#| code-fold: true
+#| code-summary: "Show code"
+mc3_graph_all_degree <- mc3_graph_all %>%
+  top_frac(0.20, wt = degree_centrality)
+
+mc3_graph_bo_degree <- mc3_graph_bo %>%
+  top_frac(0.20, wt = degree_centrality)
+
+mc3_graph_cc_degree <- mc3_graph_cc %>%
+  top_frac(0.20, wt = degree_centrality)
+```
+
+The below code chunk saves the respective graphs to a RDS file for subsequent usage.
+
+```{r}
+#| code-fold: true
+#| code-summary: "Show code"
+write_rds(mc3_graph_all_degree, "data/mc3_graph_all_degree.rds")
+write_rds(mc3_graph_bo_degree, "data/mc3_graph_bo_degree.rds")
+write_rds(mc3_graph_cc_degree, "data/mc3_graph_cc_degree.rds")
+```
+
+### 4.5 Preparing the edge and nodes for graph plotting
+
+Note that tidygraph model is in R list format. The code chunk below will be used to extract and convert the edges into a tibble data frame.
+
+-   activate() is used to make the edges of mc3_graph_all/bo/cc_degree active. This is necessary in order to extract the correct component from the list object.
+-   as.tibble() is used to convert the edges list into tibble data frame.
+
+```{r}
+#| code-fold: true
+#| code-summary: "Show code"
+edges_df_all <- mc3_graph_all_degree %>%
+  activate(edges) %>%
+  as.tibble()
+
+edges_df_bo <- mc3_graph_bo_degree %>%
+  activate(edges) %>%
+  as.tibble()
+
+edges_df_cc <- mc3_graph_cc_degree %>%
+  activate(edges) %>%
+  as.tibble()
+```
+
+The below code chunk serves to prepare a nodes tibble data frame.
+
+-   activate() is used to make the edges of mc3_graph_all/bo/cc_degree active. This is necessary in order to extract the correct component from the list object.
+-   as.tibble() is used to convert the edges list into tibble data frame.
+-   rename() is used to rename the field name id to label.
+-   mutate() is used to create a new field called id and row_number() is used to assign the row number into id values.
+-   select() is used to re-organised the field name. This is because visNetwork is expecting the first field is called id and the second field is called label.
+
+```{r}
+#| code-fold: true
+#| code-summary: "Show code"
+nodes_df_all <- mc3_graph_all_degree %>%
+  activate(nodes) %>%
+  as.tibble() %>%
+  rename(label = id) %>%
+  mutate(id=row_number()) %>%
+  select(id, label, country, type, product_services, revenue_omu, company_contact_count, beneficial_owner_count, quantile)
+
+nodes_df_bo <- mc3_graph_bo_degree %>%
+  activate(nodes) %>%
+  as.tibble() %>%
+  rename(label = id) %>%
+  mutate(id=row_number()) %>%
+  select(id, label, country, type, product_services, revenue_omu, quantile)
+
+nodes_df_cc <- mc3_graph_cc_degree %>%
+  activate(nodes) %>%
+  as.tibble() %>%
+  rename(label = id) %>%
+  mutate(id=row_number()) %>%
+  select(id, label, country, type, product_services, revenue_omu, quantile)
+```
+
+## 5. Interactive Network Visualisation
+
+Within Section 5, we have:
+
+-   Section 5.1: This section focuses on looking at the interactive network visualisation on an overall basis by revenue quantiles and country
+
+-   Section 5.2: This section focuses on looking at the interactive network visualisation specifically on beneficial owner relationship with Company by revenue quantiles and country
+
+-   Section 5.3: This section focuses on looking at the interactive network visualisation specifically on company contact relationship with Company by revenue quantiles and country
+
+Note that the analysis can be done either by countries or revenue quantiles, where the objective is to find the node with a higher degree centrality.
+
+### 5.1 Company by Overall View
+
+::: panel-tabset
+#### By Revenue Quantiles
+
+```{r}
+#| echo: false
+set.seed(123)
+
+id_node <- sort(nodes_df_all$id) # for the id nodes dropdown box
+
+vis_plot_interactive_quantiles_all <- visNetwork(nodes = nodes_df_all, edges = edges_df_all) %>%
+  visIgraphLayout(layout = "layout_with_fr", 
+                  smooth = FALSE,
+                  physics = TRUE       
+                ) %>%
+visNodes(color = list(highlight = list(border = 'red', background = 'yellow', size = 50))) %>%
+  visEdges(color = list(highlight = "black"), arrows = 'to', 
+           smooth = list(enabled = TRUE, type = "curvedCW")) %>%
+  visOptions(selectedBy = "quantile",
+             highlightNearest = list(enabled = TRUE,
+                                     degree = 1,
+                                     hover = TRUE,
+                                     labelOnly = TRUE),
+             nodesIdSelection = list(enabled = TRUE,
+                                     values = id_node)) %>%
+  visLegend(width = 0.1)
+
+vis_plot_interactive_quantiles_all
+```
+
+#### By Country
+
+```{r}
+#| echo: false
+set.seed(123)
+
+id_node <- sort(nodes_df_all$id) # for the id nodes dropdown box
+
+vis_plot_interactive_country_all <- visNetwork(nodes = nodes_df_all, edges = edges_df_all) %>%
+  visIgraphLayout(layout = "layout_with_fr", 
+                  smooth = FALSE,
+                  physics = TRUE       
+                ) %>%
+visNodes(color = list(highlight = list(border = 'red', background = 'yellow', size = 50))) %>%
+  visEdges(color = list(highlight = "black"), arrows = 'to', 
+           smooth = list(enabled = TRUE, type = "curvedCW")) %>%
+  visOptions(selectedBy = "country",
+             highlightNearest = list(enabled = TRUE,
+                                     degree = 1,
+                                     hover = TRUE,
+                                     labelOnly = TRUE),
+             nodesIdSelection = list(enabled = TRUE,
+                                     values = id_node)) %>%
+  visLegend(width = 0.1)
+
+vis_plot_interactive_country_all
+```
+
+#### Code Chunk
+
+```{r}
+#| eval: false
+set.seed(123)
+
+id_node <- sort(nodes_df_all$id) # for the id nodes dropdown box
+
+vis_plot_interactive_quantiles_all <- visNetwork(nodes = nodes_df_all, edges = edges_df_all) %>%
+  visIgraphLayout(layout = "layout_with_fr", 
+                  smooth = FALSE,
+                  physics = TRUE       
+                ) %>%
+visNodes(color = list(highlight = list(border = 'red', background = 'yellow', size = 50))) %>%
+  visEdges(color = list(highlight = "black"), arrows = 'to', 
+           smooth = list(enabled = TRUE, type = "curvedCW")) %>%
+  visOptions(selectedBy = "quantile",
+             highlightNearest = list(enabled = TRUE,
+                                     degree = 1,
+                                     hover = TRUE,
+                                     labelOnly = TRUE),
+             nodesIdSelection = list(enabled = TRUE,
+                                     values = id_node)) %>%
+  visLegend(width = 0.1)
+
+vis_plot_interactive_quantiles_all
+```
+:::
+
+### 5.2 Company by Beneficial Owners
+
+::: panel-tabset
+#### By Revenue Quantiles
+
+```{r}
+#| echo: false
+set.seed(123)
+
+id_node <- sort(nodes_df_bo$id) # for the id nodes dropdown box
+
+vis_plot_interactive_quantiles_bo <- visNetwork(nodes = nodes_df_bo, edges = edges_df_bo) %>%
+  visIgraphLayout(layout = "layout_with_fr", 
+                  smooth = FALSE,
+                  physics = TRUE       
+                ) %>%
+visNodes(color = list(highlight = list(border = 'red', background = 'yellow', size = 50))) %>%
+  visEdges(color = list(highlight = "black"), arrows = 'to', 
+           smooth = list(enabled = TRUE, type = "curvedCW")) %>%
+  visOptions(selectedBy = "quantile",
+             highlightNearest = list(enabled = TRUE,
+                                     degree = 1,
+                                     hover = TRUE,
+                                     labelOnly = TRUE),
+             nodesIdSelection = list(enabled = TRUE,
+                                     values = id_node)) %>%
+  visLegend(width = 0.1)
+
+vis_plot_interactive_quantiles_bo
+```
+
+#### By Country
+
+```{r}
+#| echo: false
+set.seed(123)
+
+id_node <- sort(nodes_df_bo$id) # for the id nodes dropdown box
+
+vis_plot_interactive_country_bo <- visNetwork(nodes = nodes_df_bo, edges = edges_df_bo) %>%
+  visIgraphLayout(layout = "layout_with_fr", 
+                  smooth = FALSE,
+                  physics = TRUE       
+                ) %>%
+visNodes(color = list(highlight = list(border = 'red', background = 'yellow', size = 50))) %>%
+  visEdges(color = list(highlight = "black"), arrows = 'to', 
+           smooth = list(enabled = TRUE, type = "curvedCW")) %>%
+  visOptions(selectedBy = "country",
+             highlightNearest = list(enabled = TRUE,
+                                     degree = 1,
+                                     hover = TRUE,
+                                     labelOnly = TRUE),
+             nodesIdSelection = list(enabled = TRUE,
+                                     values = id_node)) %>%
+  visLegend(width = 0.1)
+
+vis_plot_interactive_country_bo
+```
+
+#### Code Chunk
+
+```{r}
+#| eval: false
+set.seed(123)
+
+id_node <- sort(nodes_df_bo$id) # for the id nodes dropdown box
+
+vis_plot_interactive_quantiles_bo <- visNetwork(nodes = nodes_df_bo, edges = edges_df_bo) %>%
+  visIgraphLayout(layout = "layout_with_fr", 
+                  smooth = FALSE,
+                  physics = TRUE       
+                ) %>%
+visNodes(color = list(highlight = list(border = 'red', background = 'yellow', size = 50))) %>%
+  visEdges(color = list(highlight = "black"), arrows = 'to', 
+           smooth = list(enabled = TRUE, type = "curvedCW")) %>%
+  visOptions(selectedBy = "quantile",
+             highlightNearest = list(enabled = TRUE,
+                                     degree = 1,
+                                     hover = TRUE,
+                                     labelOnly = TRUE),
+             nodesIdSelection = list(enabled = TRUE,
+                                     values = id_node)) %>%
+  visLegend(width = 0.1)
+
+vis_plot_interactive_quantiles_bo
+```
+:::
+
+### 5.3 Company by Company Contacts
+
+::: panel-tabset
+#### By Revenue Quantiles
+
+```{r}
+#| echo: false
+set.seed(123)
+
+id_node <- sort(nodes_df_cc$id) # for the id nodes dropdown box
+
+vis_plot_interactive_quantiles_cc <- visNetwork(nodes = nodes_df_cc, edges = edges_df_cc) %>%
+  visIgraphLayout(layout = "layout_with_fr", 
+                  smooth = FALSE,
+                  physics = TRUE       
+                ) %>%
+visNodes(color = list(highlight = list(border = 'red', background = 'yellow', size = 50))) %>%
+  visEdges(color = list(highlight = "black"), arrows = 'to', 
+           smooth = list(enabled = TRUE, type = "curvedCW")) %>%
+  visOptions(selectedBy = "quantile",
+             highlightNearest = list(enabled = TRUE,
+                                     degree = 1,
+                                     hover = TRUE,
+                                     labelOnly = TRUE),
+             nodesIdSelection = list(enabled = TRUE,
+                                     values = id_node)) %>%
+  visLegend(width = 0.1)
+
+vis_plot_interactive_quantiles_cc
+```
+
+#### By Country
+
+```{r}
+#| echo: false
+set.seed(123)
+
+id_node <- sort(nodes_df_cc$id) # for the id nodes dropdown box
+
+vis_plot_interactive_country_cc <- visNetwork(nodes = nodes_df_cc, edges = edges_df_cc) %>%
+  visIgraphLayout(layout = "layout_with_fr", 
+                  smooth = FALSE,
+                  physics = TRUE       
+                ) %>%
+visNodes(color = list(highlight = list(border = 'red', background = 'yellow', size = 50))) %>%
+  visEdges(color = list(highlight = "black"), arrows = 'to', 
+           smooth = list(enabled = TRUE, type = "curvedCW")) %>%
+  visOptions(selectedBy = "country",
+             highlightNearest = list(enabled = TRUE,
+                                     degree = 1,
+                                     hover = TRUE,
+                                     labelOnly = TRUE),
+             nodesIdSelection = list(enabled = TRUE,
+                                     values = id_node)) %>%
+  visLegend(width = 0.1)
+
+vis_plot_interactive_country_cc
+```
+
+#### Code Chunk
+
+```{r}
+#| eval: false
+set.seed(123)
+
+id_node <- sort(nodes_df_cc$id) # for the id nodes dropdown box
+
+vis_plot_interactive_quantiles_cc <- visNetwork(nodes = nodes_df_cc, edges = edges_df_cc) %>%
+  visIgraphLayout(layout = "layout_with_fr", 
+                  smooth = FALSE,
+                  physics = TRUE       
+                ) %>%
+visNodes(color = list(highlight = list(border = 'red', background = 'yellow', size = 50))) %>%
+  visEdges(color = list(highlight = "black"), arrows = 'to', 
+           smooth = list(enabled = TRUE, type = "curvedCW")) %>%
+  visOptions(selectedBy = "quantile",
+             highlightNearest = list(enabled = TRUE,
+                                     degree = 1,
+                                     hover = TRUE,
+                                     labelOnly = TRUE),
+             nodesIdSelection = list(enabled = TRUE,
+                                     values = id_node)) %>%
+  visLegend(width = 0.1)
+
+vis_plot_interactive_quantiles_cc
+```
+:::
+
+## 6. MC3 Challenge Question 1's Answer
+
+**Question: Use visual analytics to identify anomalies in the business groups present in the knowledge graph.**
+
+From the image below, we observe that:
+
+-   most beneficial owners usually own only one company
+
+-   most company contacts are usually only linked to one company.
+
+![](mcimage_1,2.png)
+
+It is useful to deep dive into countries with a high number of companies involved in fishing related activities (ZH and Oceanus from the below plot). In a study by Financial Transparency Coalition, fishing vessels flagged to Asia (particularly China), were found to have the world\'s largest distant water fleet, with 54.7% tagged as IUU fishing (The Guardian, 2022). Hence, focusing on a higher number of fleet occurrence in a country might potentially help detect IUU fishing.
+
+![](mcimage_3.png)
+
+While our interactive network visualisation focuses on the top 20% degree centrality, it is important/relevant for us to also compute closeness and betweenness centrality.
+
+-   Higher degree centrality indicates that the node has more connections than the average number of connections as compared to other nodes.
+
+-   Higher closeness centrality indicates a shorter distance relative to all other nodes.
+
+-   Higher betweenness centrality measures the extent to which a particular node lies on the path between other nodes.
+
+Revenue was divided into four main quantiles, with a scale of 1 (lowest revenue) to 4 (highest revenue).
+
+According to an article "Fishy networks: Uncovering the companies and individuals behind illegal fishing globally", vessels operators involved in IUU fishing were taking advantage on the lack of regulations by using complex ownership structures to hide the identities of their ultimate beneficial owners. Therefore, a company with more beneficial owners (and correspondingly a higher degree centrality) is worthy to investigate.
+
+Likewise, illegal fishing typically involves various actors such as fishing companies, wholesalers and suppliers etc. A higher number of company contacts can provide illegal fishing companies with access to valuable resources and revenues to enable their illegal activities. Therefore, it is worthwhile to look from a high degree centrality perspective in relation to company contacts.
+
+Leveraging on the interactive plots in Section 5, we focused on companies' connection to beneficial owners and company contacts respectively. Using "Congo Rapids   Ltd. Corporation" as an example, we can see that it has connections to several beneficial owners.
+
+![](mcimage_4.png)
+
+```{r}
+#| code-fold: true
+#| code-summary: "Show code"
+DT::datatable(mc3_nodes_all)
+```
+
+However, when we utilised DT::datatable(mc3_nodes_all) to gain an insight into the other centrality measures. It appears to have relatively low closeness centrality (0.0166667) but high betweenness centrality (1770). This suspicious company is owned by several beneficial owners (possibly to mask the ultimate beneficial owner), with low direct proximity to other companies (indicating a "relatively closed off network"). Yet, it serves as a significant intermediary between other companies in the flow of illegal fishing in the broader network. Hence, the said company can potentially be acting as a bridge to facilitate the illegal fishing network.
+
+![](table1.png)
+
+Next, we look at "By Country" perspective. Zooming into Oceanus, which has the second highest count in terms of fishing related companies, we detected "Aqua Aura SE Marine life" as having a lot of company contacts. Companies involved in illegal fishing might potentially be more prone to having a few company contacts to enable a higher revenue stream.
+
+![](mcimage_5.png)
+
+```{r}
+#| code-fold: true
+#| code-summary: "Show code"
+DT::datatable(mc3_nodes_all)
+```
+
+Utilising DT::datatable(mc3_nodes_all), we found that the said company has presence in two different countries. The first record in the table below was the one picked up via the network graph. Likewise, it has a high degree and betweenness centrality but low closeness centrality, hence making it a suspicious company potentially involved in illegal fishing.
+
+![](table2.png){width="682"}
+
+Finally, focusing on "Revenue Quantile - 4", this initially pointed our attention to"Zambezi Gorge Incorporated Consulting". A closer look reveals that Adam Johnson is a rather suspicious node as it owns several companies (unlike most beneficial owner who usually owns 1 company).
+
+![](mcimage_6.png)
+
+## 7. Reflections
+
+Similar to Take Home Exercise 2, the most difficult aspect of working with this graph is in relation to the steep learning curve in relation to coding and computing resources. While I have an idea of going about analyzing or wrangling the data, it is difficult for me to put it into action as I am just beginning to be more familiar with R.
+
+Thankfully, Professor Kam extended the submission due date and he was always open to taking time out for consultation. Professor Kam also helped me and the class to get up to speed by explaining data wrangling concepts and guiding me along the way in terms of framing my thoughts to enable me to complete the assignment.
+
+I learnt a lot from this take-home exercise but as always, I'm sure there is more to learn in this journey.
+
+## 8. References
+
+-   https://financialtransparency.org/fishy-networks-challenges-uncovering-beneficial-owners-behind-illegal-fishing-global-south-countries/
+-   https://rpubs.com/neloe/ggraph_intro
+-   https://combattb.org/combat-tb-neodb/graph-algorithms/
+-   https://www.theguardian.com/environment/2022/oct/26/illegal-fishing-billions-losses-developing-countries
+-   https://maritime-executive.com/article/report-the-corporate-owners-behind-illegal-fishing
+-   https://financialtransparency.org/reports/fishy-networks-uncovering-companies-individuals-behind-illegal-fishing-globally
