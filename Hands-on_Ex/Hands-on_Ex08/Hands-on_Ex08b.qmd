@@ -62,8 +62,8 @@ The code chunk below converts sgpools data frame into a simple feature data fram
 
 ```{r}
 sgpools_sf <- st_as_sf(sgpools, 
-                       coords = c("XCOORD", "YCOORD"),
-                       crs= 3414)
+                       coords = c("XCOORD", "YCOORD"), #always need to start with xcoord and ycoord as in cartisean coordinates, we read the xcoord followed by ycoord
+                       crs= 3414) #this a code for svf21, if we don't specify crs, then it will not understand that my map data is in svf21
 ```
 
 Things to learn from the arguments above: - The coords argument requires you to provide the column name of the x-coordinates first then followed by the column name of the y-coordinates. - The crs argument required you to provide the coordinates system in epsg format. EPSG: 3414 is Singapore SVY21 Projected Coordinate System. You can search for other country's epsg code by refering to epsg.io.
@@ -84,7 +84,7 @@ The output shows that sgppols_sf is in point feature class. It's epsg ID is 3414
 
 To create an interactive proportional symbol map in R, the view mode of tmap will be used.
 
-The code churn below will turn on the interactive mode of tmap.
+The code churn below will turn on the interactive mode of tmap. Note that "Plot" will plot a static view while "View" will plot an interactive map.
 
 ```{r}
 tmap_mode("view")

@@ -53,8 +53,14 @@ Two data set will be used to create the choropleth map. They are:
 
 The code chunk below uses the st_read() function of sf package to import MP14_SUBZONE_WEB_PL shapefile into R as a simple feature data frame called mpsz.
 
+Note that st_read and read_sf provides the same result. If it's a shp file, then we need to define the dsn which is the destination folder, i.e, where the geospatial data is held at. Additionally, we need to inform R of the specific layer.
+
+Within our folder, there is a collection of file ending with .dbf, .shp. shx, Therefore, we need to tell R the layer we are using, we do not need to tell it which extension as it will be able to pick up all of it.
+
+Upon running the code below, we will see that there is one field called "Geometry". Note that mpsz is a sf data model in a dataframe format. "Geometry" field will provide the coordinate pairs. If it's a polygon, it will provide the coordinate pair of the polygon.
+
 ```{r}
-mpsz <- st_read(dsn = "data/geospatial", 
+mpsz <- st_read(dsn = "data/geospatial",  
                 layer = "MP14_SUBZONE_WEB_PL")
 ```
 
@@ -94,8 +100,8 @@ The following data wrangling and transformation functions will be used:
 ```{r}
 popdata2020 <- popdata %>%
   filter(Time == 2020) %>%
-  group_by(PA, SZ, AG) %>%
-  summarise(`POP` = sum(`Pop`)) %>%
+  group_by(PA, SZ, AG) %>%  #aggregate data based on planning area, subzone and agegroup
+  summarise(`POP` = sum(`Pop`)) %>% #sum population by planning area, subzone and agegroup
   ungroup()%>%
   pivot_wider(names_from=AG, 
               values_from=POP) %>%
@@ -151,6 +157,12 @@ The easiest and quickest to draw a choropleth map using tmap is using qtm(). It 
 
 The code chunk below will draw a cartographic standard choropleth map as shown below.
 
+GGplot2 is generic visualisation and does not have mapping such as classification, hence we are looking to use tmap instead. tmap is specially designed for thematic mapping. tmap is written based on grammar of the graphics, hence the syntax will be very similar to ggplot2. tmap also have facets similar to ggplot2. 
+
+Additionally, tmap has static and interactive mode. 
+
+Note that qtm refers to "quick tmap".
+
 ```{r}
 tmap_mode("plot")
 qtm(mpsz_pop2020, 
@@ -165,19 +177,21 @@ Things to learn from the code chunk above: - tmap_mode() with "plot" option is u
 
 Despite its usefulness of drawing a choropleth map quickly and easily, the disadvantge of qtm() is that it makes aesthetics of individual layers harder to control. To draw a high quality cartographic choropleth map as shown in the figure below, tmap's drawing elements should be used.
 
+The graph below is in metres, hence we observe that the x and y axis contains big values.
+
 ```{r}
 tm_shape(mpsz_pop2020)+
-  tm_fill("DEPENDENCY", 
-          style = "quantile", 
+  tm_fill("DEPENDENCY", #used to create/draw the tmap polygon shape layer
+          style = "quantile", #classification method
           palette = "Blues",
-          title = "Dependency ratio") +
+          title = "Dependency ratio") + #n refers to number of cluster that we want to use
   tm_layout(main.title = "Distribution of Dependency Ratio by planning subzone",
             main.title.position = "center",
             main.title.size = 1.2,
             legend.height = 0.45, 
             legend.width = 0.35,
             frame = TRUE) +
-  tm_borders(alpha = 0.5) +
+  tm_borders(alpha = 0.5) + #border of the polygon, alpha defines the intensity
   tm_compass(type="8star", size = 2) +
   tm_scale_bar() +
   tm_grid(alpha =0.2) +
@@ -329,6 +343,7 @@ Map layout refers to the combination of all map elements into a cohensive map. M
 #### 8.4.5.1 Map Legend
 
 In tmap, several legend options are provided to change the placement, format and appearance of the legend.
+A histogram was also added into the map below via legend.hist.z().
 
 ```{r}
 tm_shape(mpsz_pop2020)+
@@ -408,7 +423,7 @@ In tmap, small multiple maps can be plotted in three ways:
 
 #### 8.4.6.1 By assigning multiple values to at least one of the aesthetic arguments
 
-In this example, small multiple choropleth maps are created by defining ncols in tm_fill()
+In this example, small multiple choropleth maps are created by defining ncols in tm_fill(), thereby showing two separate choropleth map (one for "YOUNG", while another for "AGED")
 
 ```{r}
 tm_shape(mpsz_pop2020)+
@@ -441,7 +456,7 @@ tm_shape(mpsz_pop2020) +
           palette = "Blues",
           thres.poly = 0) + 
   tm_facets(by="REGION_N", 
-            free.coords=TRUE, 
+            free.coords=TRUE, #free.coords will create a facet based on the extent of the map field for each facet to avoid empty spaces.
             drop.shapes=TRUE) +
   tm_layout(legend.show = FALSE,
             title.position = c("center", "center"), 
