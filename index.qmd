@@ -10,7 +10,4 @@ Welcome to my humble webpage (still a work-in-progress)!
 Within this website, you will be able to take a glimpse into the key learnings and take-aways I gleamed from my coursework: **ISSS608 Visual Analytics and Applications.**
 
 I hope you enjoy browsing through it as much as I enjoyed working on this page.
-
-In the meantime, you can find out more about me [here](https://isss608-ay2022-23t2-leepeckkhee.netlify.app/about.html)!
 :::
-
