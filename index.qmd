@@ -1,5 +1,16 @@
 ---
-title: "ISSS608-VAA"
+#title: "Welcome to Peck Khee's World"
 ---
 
-Welcome to **ISSS608 Visual Analytics and Applications**. In this website, you will find my coursework prepared for this course.
+[![](giphy.gif){fig-align="center" width="279"}](https://media.giphy.com/media/JWuBH9rCO2uZuHBFpm/giphy.gif)
+
+::: {style="text-align: center;"}
+Welcome to my humble webpage (still a work-in-progress)!
+
+Within this website, you will be able to take a glimpse into the key learnings and take-aways I gleamed from my coursework: **ISSS608 Visual Analytics and Applications.**
+
+I hope you enjoy browsing through it as much as I enjoyed working on this page.
+
+In the meantime, you can find out more about me [here](https://isss608-ay2022-23t2-leepeckkhee.netlify.app/about.html)!
+:::
+

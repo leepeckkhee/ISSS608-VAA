@@ -1,5 +1,14 @@
 ---
-title: "About"
+#title: "About"
 ---
+[![](giphy%20-%20me.gif){fig-align="center" width="279"}](https://media.giphy.com/media/AtPSSGIsTDTVRRO6vl/giphy.gif)
 
-This is a Netlify site to store all my learnings and take-aways from ISS608-Visual Analytics and Applications
+::: {style="text-align: center;"}
+I've 6 years of working experience within the finance industry with a passion for enabling meaningful insights from data. I love the sun, sea & sand, and am an avid windsurfer! I enjoy learning new things and am a current part time student at Singapore Management University, Master of IT in Business (Analytics Track).
+
+You can find out more about me via the below icons as well :)
+:::
+
+::: {style="text-align: center;"}
+[![LinkedIn](linkedin.png){alt="LinkedIn" width="31"}](https://www.linkedin.com/in/leepeckkhee/) ![GitHub](github.png){alt="GitHub" width="31"}
+:::
